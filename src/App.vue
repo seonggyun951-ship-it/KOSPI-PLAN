@@ -10,6 +10,74 @@ const supabase = createClient(
 const APP_PASSWORD = 'tjdrbs123!@#'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
+const STOCK_DB = [
+  // 코스피 대형주
+  { name:'삼성전자',       ticker:'005930.KS' },
+  { name:'SK하이닉스',     ticker:'000660.KS' },
+  { name:'LG에너지솔루션', ticker:'373220.KS' },
+  { name:'삼성바이오로직스',ticker:'207940.KS' },
+  { name:'현대차',         ticker:'005380.KS' },
+  { name:'기아',           ticker:'000270.KS' },
+  { name:'POSCO홀딩스',    ticker:'005490.KS' },
+  { name:'KB금융',         ticker:'105560.KS' },
+  { name:'NAVER',          ticker:'035420.KS' },
+  { name:'카카오',         ticker:'035720.KS' },
+  { name:'신한지주',       ticker:'055550.KS' },
+  { name:'하나금융지주',   ticker:'086790.KS' },
+  { name:'우리금융지주',   ticker:'316140.KS' },
+  { name:'삼성물산',       ticker:'028260.KS' },
+  { name:'LG화학',         ticker:'051910.KS' },
+  { name:'삼성SDI',        ticker:'006400.KS' },
+  { name:'현대모비스',     ticker:'012330.KS' },
+  { name:'SK텔레콤',       ticker:'017670.KS' },
+  { name:'KT',             ticker:'030200.KS' },
+  { name:'LG전자',         ticker:'066570.KS' },
+  { name:'한국전력',       ticker:'015760.KS' },
+  { name:'삼성생명',       ticker:'032830.KS' },
+  { name:'삼성화재',       ticker:'000810.KS' },
+  { name:'KT&G',           ticker:'033780.KS' },
+  { name:'SK이노베이션',   ticker:'096770.KS' },
+  { name:'셀트리온',       ticker:'068270.KS' },
+  { name:'SK',             ticker:'034730.KS' },
+  { name:'LG',             ticker:'003550.KS' },
+  { name:'한화에어로스페이스', ticker:'012450.KS' },
+  { name:'HD현대중공업',   ticker:'329180.KS' },
+  { name:'고려아연',       ticker:'010130.KS' },
+  { name:'HMM',            ticker:'011200.KS' },
+  { name:'두산에너빌리티', ticker:'034020.KS' },
+  { name:'카카오뱅크',     ticker:'323410.KS' },
+  { name:'카카오페이',     ticker:'377300.KS' },
+  { name:'크래프톤',       ticker:'259960.KS' },
+  { name:'엔씨소프트',     ticker:'036570.KS' },
+  { name:'넷마블',         ticker:'251270.KS' },
+  { name:'LG디스플레이',   ticker:'034220.KS' },
+  { name:'한미약품',       ticker:'128940.KS' },
+  { name:'포스코퓨처엠',   ticker:'003670.KS' },
+  { name:'CJ제일제당',     ticker:'097950.KS' },
+  { name:'롯데케미칼',     ticker:'011170.KS' },
+  { name:'현대건설',       ticker:'000720.KS' },
+  { name:'GS건설',         ticker:'006360.KS' },
+  { name:'삼성엔지니어링', ticker:'028050.KS' },
+  { name:'한국항공우주',   ticker:'047810.KS' },
+  // 코스닥
+  { name:'에코프로비엠',   ticker:'247540.KQ' },
+  { name:'에코프로',       ticker:'086520.KQ' },
+  { name:'알테오젠',       ticker:'196170.KQ' },
+  { name:'HLB',            ticker:'028300.KQ' },
+  { name:'리가켐바이오',   ticker:'141080.KQ' },
+  // 미국 주요주
+  { name:'Apple',          ticker:'AAPL' },
+  { name:'Tesla',          ticker:'TSLA' },
+  { name:'NVIDIA',         ticker:'NVDA' },
+  { name:'Microsoft',      ticker:'MSFT' },
+  { name:'Amazon',         ticker:'AMZN' },
+  { name:'Google',         ticker:'GOOGL' },
+  { name:'Meta',           ticker:'META' },
+  { name:'Netflix',        ticker:'NFLX' },
+  { name:'AMD',            ticker:'AMD' },
+  { name:'Palantir',       ticker:'PLTR' },
+]
+
 // ── 인증
 const isAuthorized = ref(false)
 const inputPassword = ref('')
@@ -41,20 +109,12 @@ const searchResults = ref([])
 const searchLoading = ref(false)
 let searchTimer = null
 
-const searchStock = async (query) => {
+const searchStock = (query) => {
   if (!query || query.trim().length < 1) { searchResults.value = []; return }
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(async () => {
-    searchLoading.value = true
-    try {
-      const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&lang=ko-KR&region=KR&quotesCount=6&newsCount=0&enableFuzzyQuery=false`
-      const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
-      const res  = await fetch(proxy)
-      const data = await res.json()
-      searchResults.value = (data?.quotes ?? []).filter(q => q.symbol && q.quoteType === 'EQUITY').slice(0, 6)
-    } catch { searchResults.value = [] }
-    searchLoading.value = false
-  }, 350)
+  const q = query.trim().toLowerCase()
+  searchResults.value = STOCK_DB.filter(s =>
+    s.name.toLowerCase().includes(q) || s.ticker.toLowerCase().includes(q)
+  ).slice(0, 6)
 }
 
 const selectSearchResult = (result, stock) => {
