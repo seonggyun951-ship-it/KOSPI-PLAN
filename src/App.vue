@@ -663,7 +663,17 @@ const scrapByStock = computed(() => {
           <h3>종목 추가</h3>
           <div class="form-row">
             <div class="form-group"><label>종목명 *</label><input v-model="newStock.name" placeholder="삼성전자" class="input-field" /></div>
-            <div class="form-group"><label>티커 (야후파이낸스)</label><input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" /></div>
+            <div class="form-group">
+              <label>티커 <span class="label-opt">(현재가 자동 조회용)</span></label>
+              <input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" />
+              <div class="field-hint">
+                📌 야후파이낸스 티커 형식<br>
+                · 국내주식: 종목코드 + <b>.KS</b> → <code>005930.KS</code> (삼성전자)<br>
+                · 코스닥: 종목코드 + <b>.KQ</b> → <code>035720.KQ</code> (카카오)<br>
+                · 미국주식: 그대로 → <code>AAPL</code>, <code>TSLA</code><br>
+                ※ 티커 없어도 종목 추가는 가능해요
+              </div>
+            </div>
           </div>
           <div class="form-row">
             <div class="form-group"><label>수량 (주)</label><input v-model.number="newStock.quantity" type="number" class="input-field" /></div>
@@ -693,7 +703,16 @@ const scrapByStock = computed(() => {
           <h3>종목 수정</h3>
           <div class="form-row">
             <div class="form-group"><label>종목명</label><input v-model="editStock.name" class="input-field" /></div>
-            <div class="form-group"><label>티커 (야후파이낸스)</label><input v-model="editStock.ticker" placeholder="005930.KS" class="input-field" /></div>
+            <div class="form-group">
+              <label>티커 <span class="label-opt">(현재가 자동 조회용)</span></label>
+              <input v-model="editStock.ticker" placeholder="005930.KS" class="input-field" />
+              <div class="field-hint">
+                📌 야후파이낸스 티커 형식<br>
+                · 국내주식: 종목코드 + <b>.KS</b> → <code>005930.KS</code> (삼성전자)<br>
+                · 코스닥: 종목코드 + <b>.KQ</b> → <code>035720.KQ</code> (카카오)<br>
+                · 미국주식: 그대로 → <code>AAPL</code>, <code>TSLA</code>
+              </div>
+            </div>
           </div>
           <div class="form-row">
             <div class="form-group"><label>수량 (주)</label><input v-model.number="editStock.quantity" type="number" class="input-field" /></div>
@@ -872,6 +891,9 @@ const scrapByStock = computed(() => {
 .btn-cancel { padding:11px 24px; border:1px solid #e0e7ff; border-radius:10px; cursor:pointer; background:white; font-size:14px; color:#6b7280; }
 .btn-primary { padding:11px 28px; background:#2563eb; color:white; border:none; border-radius:10px; font-size:14px; font-weight:700; cursor:pointer; }
 .btn-primary:disabled { opacity:0.6; }
+.label-opt { font-weight:400; color:#9ca3af; }
+.field-hint { margin-top:6px; padding:10px 12px; background:#f8faff; border:1px solid #e0e7ff; border-radius:8px; font-size:12px; color:#6b7280; line-height:1.8; }
+.field-hint code { background:#e0e7ff; color:#2563eb; padding:1px 5px; border-radius:4px; font-size:11px; }
 
 .profit { color:#ef4444; }
 .loss   { color:#2563eb; }
