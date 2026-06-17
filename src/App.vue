@@ -168,17 +168,25 @@ const autoRefreshPrices = async () => {
 
 // ── 현재가 (Yahoo Finance)
 const fetchYahooPrice = async (ticker) => {
-  try {
-    const url = `https://corsproxy.io/?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`)}`
-    const res  = await fetch(url)
-    const data = await res.json()
-    const meta = data?.chart?.result?.[0]?.meta
-    return meta ? {
-      price:         meta.regularMarketPrice,
-      prevClose:     meta.chartPreviousClose,
-      changePercent: ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose * 100)
-    } : null
-  } catch { return null }
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`
+  const proxies  = [
+    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+  ]
+  for (const proxy of proxies) {
+    try {
+      const res  = await fetch(proxy)
+      if (!res.ok) continue
+      const data = await res.json()
+      const meta = data?.chart?.result?.[0]?.meta
+      if (meta?.regularMarketPrice) return {
+        price:         meta.regularMarketPrice,
+        prevClose:     meta.chartPreviousClose,
+        changePercent: ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose * 100)
+      }
+    } catch { continue }
+  }
+  return null
 }
 
 const refreshAllPrices = async () => {
@@ -525,10 +533,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
                         <td>
-                          <div class="price-cell">
-                            <span>{{ fmt(s.current_price) }}원</span>
-                            <input type="number" placeholder="수정" class="inline-price-input" @change="quickUpdatePrice(s,$event.target.value);$event.target.value=''" />
-                          </div>
+                          <span>{{ fmt(s.current_price) }}원</span>
                         </td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
@@ -580,10 +585,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
                         <td>
-                          <div class="price-cell">
-                            <span>{{ fmt(s.current_price) }}원</span>
-                            <input type="number" placeholder="수정" class="inline-price-input" @change="quickUpdatePrice(s,$event.target.value);$event.target.value=''" />
-                          </div>
+                          <span>{{ fmt(s.current_price) }}원</span>
                         </td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
