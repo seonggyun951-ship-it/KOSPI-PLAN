@@ -11,7 +11,7 @@ const APP_PASSWORD = 'tjdrbs123!@#'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
 // ── 인증
-const isAuthorized = ref(localStorage.getItem('stock_auth') === 'true')
+const isAuthorized = ref(false)
 const inputPassword = ref('')
 
 // ── 데이터
@@ -47,7 +47,6 @@ const setToast = (s) => {
 const login = async () => {
   if (inputPassword.value === APP_PASSWORD) {
     isAuthorized.value = true
-    localStorage.setItem('stock_auth', 'true')
     await fetchAll()
   } else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
 }
