@@ -119,8 +119,8 @@ const searchStock = (query) => {
 }
 
 const selectSearchResult = (result, stock) => {
-  stock.name   = result.shortname || result.longname || stock.name
-  stock.ticker = result.symbol
+  stock.name   = result.name
+  stock.ticker = result.ticker
   searchResults.value = []
 }
 
@@ -781,10 +781,10 @@ const scrapByStock = computed(() => {
                 @input="searchStock(newStock.name)" @blur="clearSearch" />
               <div v-if="searchResults.length > 0 || searchLoading" class="search-dropdown">
                 <div v-if="searchLoading" class="search-loading">🔍 검색 중...</div>
-                <div v-for="r in searchResults" :key="r.symbol" class="search-item"
+                <div v-for="r in searchResults" :key="r.ticker" class="search-item"
                   @mousedown.prevent="selectSearchResult(r, newStock)">
-                  <div class="si-name">{{ r.shortname || r.longname }}</div>
-                  <div class="si-ticker">{{ r.symbol }}</div>
+                  <div class="si-name">{{ r.name }}</div>
+                  <div class="si-ticker">{{ r.ticker }}</div>
                 </div>
               </div>
             </div>
@@ -1012,7 +1012,8 @@ const scrapByStock = computed(() => {
 .bookmark-btn.saved { border-color:#7c3aed; background:#faf5ff; }
 
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
-.modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow-y:auto; }
+.modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow:visible; }
+.modal-inner { max-height:calc(90vh - 56px); overflow-y:auto; }
 .modal h3 { font-size:18px; font-weight:700; color:#1e3a8a; margin-bottom:20px; }
 .form-row { display:flex; gap:16px; margin-bottom:16px; }
 .form-group { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
