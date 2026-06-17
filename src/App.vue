@@ -102,7 +102,7 @@ const selectedStock   = ref(null)
 const bookmarkedIds   = ref(new Set())
 
 // ── 폼
-const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', current_price:'', memo:'', type:'long' })
+const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' })
 
 // ── 종목 검색 자동완성
 const searchResults = ref([])
@@ -155,6 +155,15 @@ const fetchAll = async () => {
     }
   } catch (e) { console.error(e) }
   loading.value = false
+  autoRefreshPrices()
+}
+
+const autoRefreshPrices = async () => {
+  const targets = stocks.value.filter(s => s.ticker)
+  for (const stock of targets) {
+    const info = await fetchYahooPrice(stock.ticker)
+    if (info?.price) await updateCurrentPrice(stock, info.price)
+  }
 }
 
 // ── 현재가 (Yahoo Finance)
@@ -257,17 +266,21 @@ const addStock = async () => {
     name:          newStock.value.name.trim(),
     ticker:        newStock.value.ticker.trim(),
     quantity:      Number(newStock.value.quantity)      || 0,
-    avg_price:     Number(newStock.value.avg_price)     || 0,
-    current_price: Number(newStock.value.current_price) || 0,
+    avg_price:     Number(newStock.value.avg_price) || 0,
+    current_price: 0,
     memo:          newStock.value.memo,
     type:          newStock.value.type
   }
   const { data, error } = await supabase.from('stock_items').insert(payload).select().single()
   if (!error && data) {
     stocks.value.push(data)
-    newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', current_price:'', memo:'', type:'long' }
+    newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' }
     showAdd.value = false
     setToast('saved')
+    if (data.ticker) {
+      const info = await fetchYahooPrice(data.ticker)
+      if (info?.price) await updateCurrentPrice(data, info.price)
+    }
   } else { setToast('error'); alert('추가 실패: ' + error.message) }
 }
 
@@ -777,8 +790,7 @@ const scrapByStock = computed(() => {
           </div>
           <div class="form-row">
             <div class="form-group"><label>수량 (주)</label><input v-model.number="newStock.quantity" type="number" class="input-field" /></div>
-            <div class="form-group"><label>평균단가</label><input v-model.number="newStock.avg_price" type="number" class="input-field" /></div>
-            <div class="form-group"><label>현재가</label><input v-model.number="newStock.current_price" type="number" class="input-field" /></div>
+            <div class="form-group"><label>평균단가 (원)</label><input v-model.number="newStock.avg_price" type="number" placeholder="75400" class="input-field" /></div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -828,8 +840,7 @@ const scrapByStock = computed(() => {
           </div>
           <div class="form-row">
             <div class="form-group"><label>수량 (주)</label><input v-model.number="editStock.quantity" type="number" class="input-field" /></div>
-            <div class="form-group"><label>평균단가</label><input v-model.number="editStock.avg_price" type="number" class="input-field" /></div>
-            <div class="form-group"><label>현재가</label><input v-model.number="editStock.current_price" type="number" class="input-field" /></div>
+            <div class="form-group"><label>평균단가 (원)</label><input v-model.number="editStock.avg_price" type="number" class="input-field" /></div>
           </div>
           <div class="form-row">
             <div class="form-group">
