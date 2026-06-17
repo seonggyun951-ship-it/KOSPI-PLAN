@@ -7,7 +7,8 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_KEY
 )
 
-const EDGE_FUNCTION_URL = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/smooth-action'
+const EDGE_FUNCTION_URL  = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/smooth-action'
+const KIS_PRICE_URL     = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/kis-price'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
 const STOCK_DB = [
@@ -171,46 +172,44 @@ const fetchAll = async () => {
 
 const autoRefreshPrices = async () => {
   const targets = stocks.value.filter(s => s.ticker)
+  if (!targets.length) return
+  const tickers = targets.map(s => s.ticker)
+  const prices  = await fetchPrices(tickers)
   for (const stock of targets) {
-    const info = await fetchYahooPrice(stock.ticker)
-    if (info?.price) await updateCurrentPrice(stock, info.price)
+    const price = prices[stock.ticker]
+    if (price) await updateCurrentPrice(stock, price)
   }
 }
 
-// ── 현재가 (Yahoo Finance)
-const fetchYahooPrice = async (ticker) => {
-  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`
-  const proxies  = [
-    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-  ]
-  for (const proxy of proxies) {
-    try {
-      const res  = await fetch(proxy)
-      if (!res.ok) continue
-      const data = await res.json()
-      const meta = data?.chart?.result?.[0]?.meta
-      if (meta?.regularMarketPrice) return {
-        price:         meta.regularMarketPrice,
-        prevClose:     meta.chartPreviousClose,
-        changePercent: ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose * 100)
-      }
-    } catch { continue }
-  }
-  return null
+// ── 현재가 (KIS API via Edge Function)
+const fetchPrices = async (tickers) => {
+  try {
+    const res  = await fetch(KIS_PRICE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}`
+      },
+      body: JSON.stringify({ tickers })
+    })
+    const data = await res.json()
+    return data?.ok ? data.prices : {}
+  } catch { return {} }
 }
 
 const refreshAllPrices = async () => {
   const targets = stocks.value.filter(s => s.ticker)
   if (!targets.length) { alert('티커가 등록된 종목이 없어요.\n종목 수정에서 티커(예: 005930.KS)를 입력해주세요.'); return }
   refreshing.value = true
+  const tickers = targets.map(s => s.ticker)
+  const prices  = await fetchPrices(tickers)
   let updated = 0
   for (const stock of targets) {
-    const info = await fetchYahooPrice(stock.ticker)
-    if (info?.price) { await updateCurrentPrice(stock, info.price); updated++ }
+    const price = prices[stock.ticker]
+    if (price) { await updateCurrentPrice(stock, price); updated++ }
   }
   refreshing.value = false
-  alert(`${updated}/${targets.length}개 업데이트 완료! (15~20분 지연)`)
+  alert(`${updated}/${targets.length}개 업데이트 완료!`)
 }
 
 // ── 뉴스 (Google News RSS)
@@ -297,8 +296,8 @@ const addStock = async () => {
     showAdd.value = false
     setToast('saved')
     if (data.ticker) {
-      const info = await fetchYahooPrice(data.ticker)
-      if (info?.price) await updateCurrentPrice(data, info.price)
+      const prices = await fetchPrices([data.ticker])
+      if (prices[data.ticker]) await updateCurrentPrice(data, prices[data.ticker])
     }
   } else { setToast('error'); alert('추가 실패: ' + error.message) }
 }
