@@ -10,15 +10,16 @@ const supabase = createClient(
 const APP_PASSWORD = 'tjdrbs123!@#'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
-// ── 인증 ────────────────────────────────────────────────────
+// ── 인증
 const isAuthorized = ref(localStorage.getItem('stock_auth') === 'true')
 const inputPassword = ref('')
 
-// ── 데이터 ──────────────────────────────────────────────────
-const stocks = ref([])
+// ── 데이터
+const stocks     = ref([])
+const savedNews  = ref([])
 
-// ── UI 상태 ─────────────────────────────────────────────────
-const tab        = ref('dashboard') // dashboard | long | short | chart
+// ── UI 상태
+const tab        = ref('dashboard')
 const loading    = ref(true)
 const saveStatus = ref(null)
 const showAdd    = ref(false)
@@ -26,7 +27,13 @@ const editStock  = ref(null)
 const refreshing = ref(false)
 const sideOpen   = ref(false)
 
-// ── 폼 ──────────────────────────────────────────────────────
+// ── 뉴스
+const newsMap         = ref({})   // { 종목명: [기사...] }
+const newsLoading     = ref({})
+const selectedStock   = ref(null)
+const bookmarkedIds   = ref(new Set())
+
+// ── 폼
 const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', current_price:'', memo:'', type:'long' })
 
 let toastTimer = null
@@ -36,7 +43,7 @@ const setToast = (s) => {
   if (s === 'saved' || s === 'error') toastTimer = setTimeout(() => { saveStatus.value = null }, 3000)
 }
 
-// ── 로그인 ──────────────────────────────────────────────────
+// ── 로그인
 const login = async () => {
   if (inputPassword.value === APP_PASSWORD) {
     isAuthorized.value = true
@@ -45,25 +52,36 @@ const login = async () => {
   } else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
 }
 
-// ── 데이터 불러오기 ──────────────────────────────────────────
+// ── 데이터 불러오기
 const fetchAll = async () => {
   loading.value = true
   try {
-    const { data, error } = await supabase.from('stock_items').select('*').order('created_at')
-    if (error) throw error
-    if (data) stocks.value = data
-  } catch (e) { console.error('불러오기 실패:', e) }
+    const [stockRes, newsRes] = await Promise.all([
+      supabase.from('stock_items').select('*').order('created_at'),
+      supabase.from('saved_news').select('*').order('created_at', { ascending: false })
+    ])
+    if (stockRes.data) stocks.value = stockRes.data
+    if (newsRes.data)  {
+      savedNews.value = newsRes.data
+      bookmarkedIds.value = new Set(newsRes.data.map(n => n.url))
+    }
+  } catch (e) { console.error(e) }
   loading.value = false
 }
 
-// ── Yahoo Finance 현재가 조회 (나중에 KIS API로 교체 예정) ───
+// ── 현재가 (Yahoo Finance)
 const fetchYahooPrice = async (ticker) => {
   try {
     const url = `https://corsproxy.io/?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`)}`
-    const res = await fetch(url)
+    const res  = await fetch(url)
     const data = await res.json()
-    return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
-  } catch (e) { return null }
+    const meta = data?.chart?.result?.[0]?.meta
+    return meta ? {
+      price:         meta.regularMarketPrice,
+      prevClose:     meta.chartPreviousClose,
+      changePercent: ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose * 100)
+    } : null
+  } catch { return null }
 }
 
 const refreshAllPrices = async () => {
@@ -72,14 +90,78 @@ const refreshAllPrices = async () => {
   refreshing.value = true
   let updated = 0
   for (const stock of targets) {
-    const price = await fetchYahooPrice(stock.ticker)
-    if (price) { await updateCurrentPrice(stock, price); updated++ }
+    const info = await fetchYahooPrice(stock.ticker)
+    if (info?.price) { await updateCurrentPrice(stock, info.price); updated++ }
   }
   refreshing.value = false
-  alert(`${updated}/${targets.length}개 종목 업데이트 완료! (15~20분 지연)`)
+  alert(`${updated}/${targets.length}개 업데이트 완료! (15~20분 지연)`)
 }
 
-// ── CRUD ────────────────────────────────────────────────────
+// ── 뉴스 (Google News RSS)
+const fetchNews = async (stockName) => {
+  if (newsMap.value[stockName]) return
+  newsLoading.value[stockName] = true
+  try {
+    const query   = encodeURIComponent(`${stockName} 주식`)
+    const rssUrl  = `https://news.google.com/rss/search?q=${query}&hl=ko&gl=KR&ceid=KR:ko`
+    const proxy   = `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`
+    const res     = await fetch(proxy)
+    const text    = await res.text()
+    const xml     = new DOMParser().parseFromString(text, 'text/xml')
+    const items   = Array.from(xml.querySelectorAll('item')).slice(0, 12)
+    newsMap.value[stockName] = items.map(item => ({
+      title:   item.querySelector('title')?.textContent?.replace(/ - [^-]+$/, '') ?? '',
+      url:     item.querySelector('link')?.textContent ?? '',
+      pubDate: item.querySelector('pubDate')?.textContent ?? '',
+      source:  item.querySelector('source')?.textContent ?? ''
+    }))
+  } catch { newsMap.value[stockName] = [] }
+  newsLoading.value[stockName] = false
+}
+
+const selectStock = async (name) => {
+  selectedStock.value = selectedStock.value === name ? null : name
+  if (selectedStock.value) await fetchNews(name)
+}
+
+const timeAgo = (dateStr) => {
+  if (!dateStr) return ''
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const h = Math.floor(diff / 3600000)
+  if (h < 1)  return `${Math.floor(diff/60000)}분 전`
+  if (h < 24) return `${h}시간 전`
+  return `${Math.floor(h/24)}일 전`
+}
+
+// ── 스크랩 저장/삭제
+const toggleBookmark = async (article, stockName) => {
+  if (bookmarkedIds.value.has(article.url)) {
+    const target = savedNews.value.find(n => n.url === article.url)
+    if (!target) return
+    const { error } = await supabase.from('saved_news').delete().eq('id', target.id)
+    if (!error) {
+      savedNews.value = savedNews.value.filter(n => n.url !== article.url)
+      bookmarkedIds.value.delete(article.url)
+    }
+  } else {
+    const payload = { title: article.title, url: article.url, stock_name: stockName, pub_date: article.pubDate, source: article.source }
+    const { data, error } = await supabase.from('saved_news').insert(payload).select().single()
+    if (!error && data) {
+      savedNews.value.unshift(data)
+      bookmarkedIds.value.add(article.url)
+    }
+  }
+}
+
+const deleteScrap = async (id, url) => {
+  const { error } = await supabase.from('saved_news').delete().eq('id', id)
+  if (!error) {
+    savedNews.value = savedNews.value.filter(n => n.id !== id)
+    bookmarkedIds.value.delete(url)
+  }
+}
+
+// ── CRUD
 const addStock = async () => {
   if (!newStock.value.name.trim()) return
   setToast('saving')
@@ -104,13 +186,7 @@ const addStock = async () => {
 const saveEdit = async () => {
   setToast('saving')
   const { id, created_at, ...fields } = editStock.value
-  const payload = {
-    ...fields,
-    name:          fields.name?.trim(),
-    quantity:      Number(fields.quantity)      || 0,
-    avg_price:     Number(fields.avg_price)     || 0,
-    current_price: Number(fields.current_price) || 0,
-  }
+  const payload = { ...fields, name: fields.name?.trim(), quantity: Number(fields.quantity)||0, avg_price: Number(fields.avg_price)||0, current_price: Number(fields.current_price)||0 }
   const { error } = await supabase.from('stock_items').update(payload).eq('id', id)
   if (!error) {
     const idx = stocks.value.findIndex(s => s.id === id)
@@ -137,7 +213,7 @@ const quickUpdatePrice = async (stock, val) => {
   await updateCurrentPrice(stock, price)
 }
 
-// ── 실시간 동기화 ────────────────────────────────────────────
+// ── 실시간
 let channel
 onMounted(async () => {
   if (isAuthorized.value) await fetchAll()
@@ -153,7 +229,7 @@ onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
 })
 
-// ── 계산 ────────────────────────────────────────────────────
+// ── 계산
 const longStocks  = computed(() => stocks.value.filter(s => s.type === 'long'))
 const shortStocks = computed(() => stocks.value.filter(s => s.type === 'short'))
 
@@ -173,7 +249,7 @@ const stockPnl   = s => s.quantity * (s.current_price - s.avg_price)
 const stockRate  = s => s.avg_price ? (s.current_price - s.avg_price) / s.avg_price * 100 : 0
 const stockValue = s => s.quantity * s.current_price
 
-// 파이차트 (종목별)
+// 파이차트
 const pieData = computed(() => {
   const t = total.value.value; if (!t) return []
   let angle = 0
@@ -185,7 +261,6 @@ const pieData = computed(() => {
   }).filter(Boolean)
 })
 
-// 파이차트 (장기/단기 비중)
 const typePieData = computed(() => {
   const t = total.value.value; if (!t) return []
   let angle = 0
@@ -208,9 +283,20 @@ function arc(cx,cy,r,sa,ea) {
   return `M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${ea-sa>180?1:0} 1 ${x2},${y2} Z`
 }
 
-const fmt     = n  => Number(n||0).toLocaleString()
-const fmtRate = r  => (r >= 0 ? '+' : '') + Number(r).toFixed(2) + '%'
-const isProfit= r  => r >= 0
+const fmt     = n => Number(n||0).toLocaleString()
+const fmtRate = r => (r >= 0 ? '+' : '') + Number(r).toFixed(2) + '%'
+const isProfit= r => r >= 0
+
+// 스크랩 종목별 그룹
+const scrapByStock = computed(() => {
+  const map = {}
+  savedNews.value.forEach(n => {
+    const key = n.stock_name || '기타'
+    if (!map[key]) map[key] = []
+    map[key].push(n)
+  })
+  return map
+})
 </script>
 
 <template>
@@ -231,7 +317,6 @@ const isProfit= r  => r >= 0
       </div>
 
       <div v-else class="layout">
-        <!-- 모바일 오버레이 -->
         <div v-if="sideOpen" class="side-overlay" @click="sideOpen=false"></div>
 
         <!-- 사이드바 -->
@@ -246,31 +331,29 @@ const isProfit= r  => r >= 0
               { key:'long',      icon:'📈', label:'장기투자'  },
               { key:'short',     icon:'⚡', label:'단기투자'  },
               { key:'chart',     icon:'📊', label:'차트'      },
+              { key:'news',      icon:'📰', label:'뉴스'      },
+              { key:'scrap',     icon:'🔖', label:'스크랩', badge: savedNews.length || null },
             ]" :key="item.key"
               class="nav-item" :class="{ active: tab===item.key }"
               @click="tab=item.key; sideOpen=false">
               <span class="nav-icon">{{ item.icon }}</span>
               <span>{{ item.label }}</span>
+              <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>
             </button>
           </nav>
-
-          <!-- 사이드바 하단 요약 -->
           <div class="sidebar-summary">
             <div class="ss-label">총 평가금액</div>
             <div class="ss-value">{{ fmt(Math.round(total.value)) }}원</div>
-            <div class="ss-rate" :class="isProfit(total.rate) ? 'profit' : 'loss'">
-              {{ fmtRate(total.rate) }}
-            </div>
+            <div class="ss-rate" :class="isProfit(total.rate) ? 'profit' : 'loss'">{{ fmtRate(total.rate) }}</div>
           </div>
         </aside>
 
         <!-- 메인 -->
         <div class="main">
-          <!-- 상단 헤더 -->
           <header class="top-bar">
             <button class="hamburger" @click="sideOpen=!sideOpen">☰</button>
             <h1 class="page-title">
-              {{ tab==='dashboard'?'대시보드':tab==='long'?'장기투자':tab==='short'?'단기투자':'차트' }}
+              {{ {dashboard:'대시보드',long:'장기투자',short:'단기투자',chart:'차트',news:'뉴스',scrap:'스크랩'}[tab] }}
             </h1>
             <div class="top-actions">
               <button class="btn-refresh" @click="refreshAllPrices" :disabled="refreshing">
@@ -280,7 +363,6 @@ const isProfit= r  => r >= 0
             </div>
           </header>
 
-          <!-- 토스트 -->
           <div class="toast" :class="{ visible: saveStatus }">
             <span v-if="saveStatus==='saving'">💾 저장 중...</span>
             <span v-else-if="saveStatus==='saved'">✅ 저장됨</span>
@@ -291,7 +373,6 @@ const isProfit= r  => r >= 0
 
             <!-- ── 대시보드 ── -->
             <template v-if="tab==='dashboard'">
-              <!-- 요약 카드 3개 -->
               <div class="summary-grid">
                 <div class="summary-card total">
                   <div class="sc-label">전체 포트폴리오</div>
@@ -311,9 +392,7 @@ const isProfit= r  => r >= 0
                     <span>투자금 {{ fmt(Math.round(long.invest)) }}원</span>
                     <span class="sc-rate" :class="isProfit(long.rate)?'profit':'loss'">{{ fmtRate(long.rate) }}</span>
                   </div>
-                  <div class="sc-pnl" :class="isProfit(long.pnl)?'profit':'loss'">
-                    {{ isProfit(long.pnl)?'+':'' }}{{ fmt(Math.round(long.pnl)) }}원
-                  </div>
+                  <div class="sc-pnl" :class="isProfit(long.pnl)?'profit':'loss'">{{ isProfit(long.pnl)?'+':'' }}{{ fmt(Math.round(long.pnl)) }}원</div>
                 </div>
                 <div class="summary-card short-card" @click="tab='short'" style="cursor:pointer">
                   <div class="sc-label">⚡ 단기투자 ({{ shortStocks.length }}개)</div>
@@ -322,32 +401,23 @@ const isProfit= r  => r >= 0
                     <span>투자금 {{ fmt(Math.round(short.invest)) }}원</span>
                     <span class="sc-rate" :class="isProfit(short.rate)?'profit':'loss'">{{ fmtRate(short.rate) }}</span>
                   </div>
-                  <div class="sc-pnl" :class="isProfit(short.pnl)?'profit':'loss'">
-                    {{ isProfit(short.pnl)?'+':'' }}{{ fmt(Math.round(short.pnl)) }}원
-                  </div>
+                  <div class="sc-pnl" :class="isProfit(short.pnl)?'profit':'loss'">{{ isProfit(short.pnl)?'+':'' }}{{ fmt(Math.round(short.pnl)) }}원</div>
                 </div>
               </div>
 
-              <!-- 전체 종목 테이블 -->
               <div class="card mt16">
                 <div class="card-title">전체 종목 ({{ stocks.length }}개)</div>
                 <div class="table-wrap">
                   <table class="stock-table">
                     <thead>
-                      <tr>
-                        <th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th>
-                        <th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th>
-                      </tr>
+                      <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in stocks" :key="s.id">
                         <td>
                           <div class="td-name">
                             <span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span>
-                            <div>
-                              <div class="name-text">{{ s.name }}</div>
-                              <div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div>
-                            </div>
+                            <div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div>
                           </div>
                         </td>
                         <td><span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span></td>
@@ -356,34 +426,27 @@ const isProfit= r  => r >= 0
                         <td>
                           <div class="price-cell">
                             <span>{{ fmt(s.current_price) }}원</span>
-                            <input type="number" placeholder="수정" class="inline-price-input"
-                              @change="quickUpdatePrice(s, $event.target.value); $event.target.value=''" />
+                            <input type="number" placeholder="수정" class="inline-price-input" @change="quickUpdatePrice(s,$event.target.value);$event.target.value=''" />
                           </div>
                         </td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
-                        <td :class="isProfit(stockPnl(s))?'profit':'loss'">
-                          {{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원
-                        </td>
-                        <td :class="isProfit(stockRate(s))?'profit':'loss'">
-                          {{ fmtRate(stockRate(s)) }}
-                        </td>
+                        <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
+                        <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
                         <td>
                           <div class="td-actions">
-                            <button @click="editStock={ ...s }" class="btn-sm">수정</button>
+                            <button @click="editStock={...s}" class="btn-sm">수정</button>
                             <button @click="deleteStock(s.id)" class="btn-sm del">삭제</button>
                           </div>
                         </td>
                       </tr>
-                      <tr v-if="stocks.length===0">
-                        <td colspan="9" class="empty-td">종목을 추가해보세요</td>
-                      </tr>
+                      <tr v-if="stocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
               </div>
             </template>
 
-            <!-- ── 장기 / 단기 공통 뷰 ── -->
+            <!-- ── 장기 / 단기 ── -->
             <template v-if="tab==='long' || tab==='short'">
               <div class="invest-header">
                 <div class="summary-card" :class="tab==='long'?'long-card':'short-card'" style="flex:1">
@@ -391,35 +454,26 @@ const isProfit= r  => r >= 0
                   <div class="sc-value">{{ fmt(Math.round(tab==='long'?long.value:short.value)) }}원</div>
                   <div class="sc-sub">
                     <span>투자금 {{ fmt(Math.round(tab==='long'?long.invest:short.invest)) }}원</span>
-                    <span class="sc-rate" :class="isProfit(tab==='long'?long.rate:short.rate)?'profit':'loss'">
-                      {{ fmtRate(tab==='long'?long.rate:short.rate) }}
-                    </span>
+                    <span class="sc-rate" :class="isProfit(tab==='long'?long.rate:short.rate)?'profit':'loss'">{{ fmtRate(tab==='long'?long.rate:short.rate) }}</span>
                   </div>
                   <div class="sc-pnl" :class="isProfit(tab==='long'?long.pnl:short.pnl)?'profit':'loss'">
                     {{ isProfit(tab==='long'?long.pnl:short.pnl)?'+':'' }}{{ fmt(Math.round(tab==='long'?long.pnl:short.pnl)) }}원
                   </div>
                 </div>
               </div>
-
               <div class="card mt16">
                 <div class="card-title">{{ tab==='long'?'장기':'단기' }} 종목 ({{ (tab==='long'?longStocks:shortStocks).length }}개)</div>
                 <div class="table-wrap">
                   <table class="stock-table">
                     <thead>
-                      <tr>
-                        <th>종목명</th><th>수량</th><th>평균단가</th>
-                        <th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th>
-                      </tr>
+                      <tr><th>종목명</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in (tab==='long'?longStocks:shortStocks)" :key="s.id">
                         <td>
                           <div class="td-name">
                             <span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span>
-                            <div>
-                              <div class="name-text">{{ s.name }}</div>
-                              <div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div>
-                            </div>
+                            <div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div>
                           </div>
                         </td>
                         <td>{{ fmt(s.quantity) }}주</td>
@@ -427,27 +481,20 @@ const isProfit= r  => r >= 0
                         <td>
                           <div class="price-cell">
                             <span>{{ fmt(s.current_price) }}원</span>
-                            <input type="number" placeholder="수정" class="inline-price-input"
-                              @change="quickUpdatePrice(s, $event.target.value); $event.target.value=''" />
+                            <input type="number" placeholder="수정" class="inline-price-input" @change="quickUpdatePrice(s,$event.target.value);$event.target.value=''" />
                           </div>
                         </td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
-                        <td :class="isProfit(stockPnl(s))?'profit':'loss'">
-                          {{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원
-                        </td>
-                        <td :class="isProfit(stockRate(s))?'profit':'loss'">
-                          {{ fmtRate(stockRate(s)) }}
-                        </td>
+                        <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
+                        <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
                         <td>
                           <div class="td-actions">
-                            <button @click="editStock={ ...s }" class="btn-sm">수정</button>
+                            <button @click="editStock={...s}" class="btn-sm">수정</button>
                             <button @click="deleteStock(s.id)" class="btn-sm del">삭제</button>
                           </div>
                         </td>
                       </tr>
-                      <tr v-if="(tab==='long'?longStocks:shortStocks).length===0">
-                        <td colspan="8" class="empty-td">종목을 추가해보세요</td>
-                      </tr>
+                      <tr v-if="(tab==='long'?longStocks:shortStocks).length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -457,7 +504,6 @@ const isProfit= r  => r >= 0
             <!-- ── 차트 ── -->
             <template v-if="tab==='chart'">
               <div class="chart-grid">
-                <!-- 종목별 비중 -->
                 <div class="card">
                   <div class="card-title">종목별 비중</div>
                   <div v-if="pieData.length > 0" class="chart-wrap">
@@ -478,8 +524,6 @@ const isProfit= r  => r >= 0
                   </div>
                   <div v-else class="empty-chart">종목을 추가해보세요</div>
                 </div>
-
-                <!-- 장기/단기 비중 -->
                 <div class="card">
                   <div class="card-title">장기 / 단기 비중</div>
                   <div v-if="typePieData.length > 0" class="chart-wrap">
@@ -498,8 +542,6 @@ const isProfit= r  => r >= 0
                   </div>
                   <div v-else class="empty-chart">종목을 추가해보세요</div>
                 </div>
-
-                <!-- 수익률 비교 바차트 -->
                 <div class="card full-width">
                   <div class="card-title">종목별 수익률</div>
                   <div v-if="stocks.length > 0" class="bar-chart">
@@ -510,21 +552,103 @@ const isProfit= r  => r >= 0
                         <span class="type-badge" :class="s.type" style="margin-left:6px">{{ s.type==='long'?'장기':'단기' }}</span>
                       </div>
                       <div class="bar-track">
-                        <div class="bar-fill"
-                          :style="{
-                            width: Math.min(Math.abs(stockRate(s)), 100) + '%',
-                            background: isProfit(stockRate(s)) ? '#ef4444' : '#2563eb',
-                            marginLeft: isProfit(stockRate(s)) ? '50%' : `${50 - Math.min(Math.abs(stockRate(s)),50)}%`
-                          }">
-                        </div>
+                        <div class="bar-fill" :style="{ width: Math.min(Math.abs(stockRate(s)),100)+'%', background: isProfit(stockRate(s))?'#ef4444':'#2563eb', marginLeft: isProfit(stockRate(s))?'50%':`${50-Math.min(Math.abs(stockRate(s)),50)}%` }"></div>
                         <div class="bar-center"></div>
                       </div>
-                      <div class="bar-rate" :class="isProfit(stockRate(s))?'profit':'loss'">
-                        {{ fmtRate(stockRate(s)) }}
-                      </div>
+                      <div class="bar-rate" :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</div>
                     </div>
                   </div>
                   <div v-else class="empty-chart">종목을 추가해보세요</div>
+                </div>
+              </div>
+            </template>
+
+            <!-- ── 뉴스 ── -->
+            <template v-if="tab==='news'">
+              <div v-if="stocks.length === 0" class="card">
+                <div class="empty-chart">종목을 먼저 추가해보세요</div>
+              </div>
+              <div v-else class="news-layout">
+                <!-- 종목 목록 -->
+                <div class="news-stock-list">
+                  <div class="card-title" style="padding:16px 16px 8px">보유 종목</div>
+                  <button v-for="(s,i) in stocks" :key="s.id"
+                    class="news-stock-btn" :class="{ active: selectedStock===s.name }"
+                    @click="selectStock(s.name)">
+                    <span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span>
+                    <span class="ns-name">{{ s.name }}</span>
+                    <span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span>
+                  </button>
+                </div>
+
+                <!-- 뉴스 패널 -->
+                <div class="news-panel">
+                  <div v-if="!selectedStock" class="card news-empty-state">
+                    <div style="text-align:center;padding:60px 20px;color:#9ca3af">
+                      <div style="font-size:48px;margin-bottom:16px">📰</div>
+                      <div style="font-size:16px;font-weight:600;margin-bottom:8px">왼쪽에서 종목을 선택하세요</div>
+                      <div style="font-size:13px">선택한 종목의 최신 뉴스를 불러옵니다</div>
+                    </div>
+                  </div>
+
+                  <div v-else class="card">
+                    <div class="news-panel-header">
+                      <div class="card-title" style="margin:0">📰 {{ selectedStock }} 최신 뉴스</div>
+                      <button class="btn-refresh-news" @click="delete newsMap[selectedStock]; fetchNews(selectedStock)">새로고침</button>
+                    </div>
+
+                    <div v-if="newsLoading[selectedStock]" class="news-loading">
+                      <div class="spinner sm"></div>
+                      <span>뉴스 불러오는 중...</span>
+                    </div>
+
+                    <div v-else-if="newsMap[selectedStock]?.length === 0" class="empty-chart">관련 뉴스가 없습니다</div>
+
+                    <div v-else class="news-list">
+                      <div v-for="article in newsMap[selectedStock]" :key="article.url" class="news-item">
+                        <div class="news-item-main">
+                          <a :href="article.url" target="_blank" rel="noopener" class="news-title">{{ article.title }}</a>
+                          <div class="news-meta">
+                            <span class="news-source">{{ article.source }}</span>
+                            <span class="news-time">{{ timeAgo(article.pubDate) }}</span>
+                          </div>
+                        </div>
+                        <button class="bookmark-btn" :class="{ saved: bookmarkedIds.has(article.url) }" @click="toggleBookmark(article, selectedStock)" :title="bookmarkedIds.has(article.url)?'스크랩 해제':'스크랩 저장'">
+                          {{ bookmarkedIds.has(article.url) ? '🔖' : '🤍' }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- ── 스크랩 ── -->
+            <template v-if="tab==='scrap'">
+              <div v-if="savedNews.length === 0" class="card">
+                <div style="text-align:center;padding:60px 20px;color:#9ca3af">
+                  <div style="font-size:48px;margin-bottom:16px">🔖</div>
+                  <div style="font-size:16px;font-weight:600;margin-bottom:8px">저장된 기사가 없어요</div>
+                  <div style="font-size:13px">뉴스 탭에서 마음에 드는 기사를 스크랩해보세요</div>
+                </div>
+              </div>
+
+              <div v-else>
+                <div v-for="(articles, stockName) in scrapByStock" :key="stockName" class="card mt16" style="margin-top:16px">
+                  <div class="card-title">{{ stockName }} ({{ articles.length }}개)</div>
+                  <div class="news-list">
+                    <div v-for="n in articles" :key="n.id" class="news-item">
+                      <div class="news-item-main">
+                        <a :href="n.url" target="_blank" rel="noopener" class="news-title">{{ n.title }}</a>
+                        <div class="news-meta">
+                          <span class="news-source">{{ n.source }}</span>
+                          <span class="news-time">{{ timeAgo(n.pub_date) }}</span>
+                          <span class="news-saved-at">저장: {{ new Date(n.created_at).toLocaleDateString('ko-KR') }}</span>
+                        </div>
+                      </div>
+                      <button class="bookmark-btn saved" @click="deleteScrap(n.id, n.url)" title="스크랩 해제">🔖</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </template>
@@ -533,33 +657,18 @@ const isProfit= r  => r >= 0
         </div>
       </div>
 
-      <!-- ── 종목 추가 모달 ── -->
+      <!-- 종목 추가 모달 -->
       <div v-if="showAdd" class="modal-overlay" @click.self="showAdd=false">
         <div class="modal">
           <h3>종목 추가</h3>
           <div class="form-row">
-            <div class="form-group">
-              <label>종목명 *</label>
-              <input v-model="newStock.name" placeholder="삼성전자" class="input-field" />
-            </div>
-            <div class="form-group">
-              <label>티커 (야후파이낸스)</label>
-              <input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" />
-            </div>
+            <div class="form-group"><label>종목명 *</label><input v-model="newStock.name" placeholder="삼성전자" class="input-field" /></div>
+            <div class="form-group"><label>티커 (야후파이낸스)</label><input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" /></div>
           </div>
           <div class="form-row">
-            <div class="form-group">
-              <label>수량 (주)</label>
-              <input v-model.number="newStock.quantity" type="number" class="input-field" />
-            </div>
-            <div class="form-group">
-              <label>평균단가</label>
-              <input v-model.number="newStock.avg_price" type="number" class="input-field" />
-            </div>
-            <div class="form-group">
-              <label>현재가</label>
-              <input v-model.number="newStock.current_price" type="number" class="input-field" />
-            </div>
+            <div class="form-group"><label>수량 (주)</label><input v-model.number="newStock.quantity" type="number" class="input-field" /></div>
+            <div class="form-group"><label>평균단가</label><input v-model.number="newStock.avg_price" type="number" class="input-field" /></div>
+            <div class="form-group"><label>현재가</label><input v-model.number="newStock.current_price" type="number" class="input-field" /></div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -569,10 +678,7 @@ const isProfit= r  => r >= 0
                 <button :class="{ active: newStock.type==='short' }" @click="newStock.type='short'">⚡ 단기투자</button>
               </div>
             </div>
-            <div class="form-group">
-              <label>메모</label>
-              <input v-model="newStock.memo" placeholder="메모" class="input-field" />
-            </div>
+            <div class="form-group"><label>메모</label><input v-model="newStock.memo" placeholder="메모" class="input-field" /></div>
           </div>
           <div class="modal-btns">
             <button @click="showAdd=false" class="btn-cancel">취소</button>
@@ -581,33 +687,18 @@ const isProfit= r  => r >= 0
         </div>
       </div>
 
-      <!-- ── 종목 수정 모달 ── -->
+      <!-- 종목 수정 모달 -->
       <div v-if="editStock" class="modal-overlay" @click.self="editStock=null">
         <div class="modal">
           <h3>종목 수정</h3>
           <div class="form-row">
-            <div class="form-group">
-              <label>종목명</label>
-              <input v-model="editStock.name" class="input-field" />
-            </div>
-            <div class="form-group">
-              <label>티커 (야후파이낸스)</label>
-              <input v-model="editStock.ticker" placeholder="005930.KS" class="input-field" />
-            </div>
+            <div class="form-group"><label>종목명</label><input v-model="editStock.name" class="input-field" /></div>
+            <div class="form-group"><label>티커 (야후파이낸스)</label><input v-model="editStock.ticker" placeholder="005930.KS" class="input-field" /></div>
           </div>
           <div class="form-row">
-            <div class="form-group">
-              <label>수량 (주)</label>
-              <input v-model.number="editStock.quantity" type="number" class="input-field" />
-            </div>
-            <div class="form-group">
-              <label>평균단가</label>
-              <input v-model.number="editStock.avg_price" type="number" class="input-field" />
-            </div>
-            <div class="form-group">
-              <label>현재가</label>
-              <input v-model.number="editStock.current_price" type="number" class="input-field" />
-            </div>
+            <div class="form-group"><label>수량 (주)</label><input v-model.number="editStock.quantity" type="number" class="input-field" /></div>
+            <div class="form-group"><label>평균단가</label><input v-model.number="editStock.avg_price" type="number" class="input-field" /></div>
+            <div class="form-group"><label>현재가</label><input v-model.number="editStock.current_price" type="number" class="input-field" /></div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -617,10 +708,7 @@ const isProfit= r  => r >= 0
                 <button :class="{ active: editStock.type==='short' }" @click="editStock.type='short'">⚡ 단기투자</button>
               </div>
             </div>
-            <div class="form-group">
-              <label>메모</label>
-              <input v-model="editStock.memo" class="input-field" />
-            </div>
+            <div class="form-group"><label>메모</label><input v-model="editStock.memo" class="input-field" /></div>
           </div>
           <div class="modal-btns">
             <button @click="editStock=null" class="btn-cancel">취소</button>
@@ -635,159 +723,170 @@ const isProfit= r  => r >= 0
 
 <style scoped>
 * { box-sizing: border-box; }
-
 .root { min-height: 100vh; background: #eef2ff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
-/* 로그인 */
-.login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #1e3a8a; }
-.login-box { background: white; padding: 48px 36px; border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center; width: 90%; max-width: 360px; }
-.login-icon { font-size: 52px; margin-bottom: 12px; }
-.login-box h2 { font-size: 20px; color: #1e3a8a; font-weight: 700; margin-bottom: 28px; }
-.pw-input { width: 100%; padding: 14px; border: 2px solid #e0e7ff; border-radius: 12px; font-size: 16px; text-align: center; margin-bottom: 16px; }
-.pw-input:focus { outline: none; border-color: #2563eb; }
+.login-screen { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#1e3a8a; }
+.login-box { background:white; padding:48px 36px; border-radius:24px; box-shadow:0 20px 60px rgba(0,0,0,0.3); text-align:center; width:90%; max-width:360px; }
+.login-icon { font-size:52px; margin-bottom:12px; }
+.login-box h2 { font-size:20px; color:#1e3a8a; font-weight:700; margin-bottom:28px; }
+.pw-input { width:100%; padding:14px; border:2px solid #e0e7ff; border-radius:12px; font-size:16px; text-align:center; margin-bottom:16px; }
+.pw-input:focus { outline:none; border-color:#2563eb; }
 
-/* 로딩 */
-.loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; color: #6b7280; gap: 16px; }
-.spinner { width: 40px; height: 40px; border: 3px solid #dbeafe; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.loading-screen { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; color:#6b7280; gap:16px; }
+.spinner { width:40px; height:40px; border:3px solid #dbeafe; border-top-color:#2563eb; border-radius:50%; animation:spin 0.8s linear infinite; }
+.spinner.sm { width:22px; height:22px; border-width:2px; }
+@keyframes spin { to { transform:rotate(360deg); } }
 
-/* 레이아웃 */
-.layout { display: flex; min-height: 100vh; }
+.layout { display:flex; min-height:100vh; }
 
-/* 사이드바 */
-.sidebar { width: 240px; flex-shrink: 0; background: #1e3a8a; color: white; display: flex; flex-direction: column; position: fixed; left: 0; top: 0; bottom: 0; z-index: 50; transition: transform 0.25s; }
-.sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 24px 20px 20px; font-size: 20px; font-weight: 800; border-bottom: 1px solid rgba(255,255,255,0.1); }
-.logo-text { font-size: 16px; letter-spacing: 1px; }
-.sidebar-nav { padding: 16px 12px; flex: 1; display: flex; flex-direction: column; gap: 4px; }
-.nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; border: none; background: none; color: rgba(255,255,255,0.65); font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; text-align: left; transition: 0.15s; }
-.nav-item:hover { background: rgba(255,255,255,0.1); color: white; }
-.nav-item.active { background: rgba(255,255,255,0.2); color: white; }
-.nav-icon { font-size: 18px; }
-.sidebar-summary { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1); }
-.ss-label { font-size: 11px; opacity: 0.6; margin-bottom: 4px; }
-.ss-value { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
-.ss-rate { font-size: 14px; font-weight: 700; }
+.sidebar { width:240px; flex-shrink:0; background:#1e3a8a; color:white; display:flex; flex-direction:column; position:fixed; left:0; top:0; bottom:0; z-index:50; transition:transform 0.25s; }
+.sidebar-logo { display:flex; align-items:center; gap:10px; padding:24px 20px 20px; font-size:20px; font-weight:800; border-bottom:1px solid rgba(255,255,255,0.1); }
+.logo-text { font-size:16px; letter-spacing:1px; }
+.sidebar-nav { padding:16px 12px; flex:1; display:flex; flex-direction:column; gap:4px; }
+.nav-item { display:flex; align-items:center; gap:12px; padding:12px 16px; border-radius:12px; border:none; background:none; color:rgba(255,255,255,0.65); font-size:14px; font-weight:600; cursor:pointer; width:100%; text-align:left; transition:0.15s; }
+.nav-item:hover { background:rgba(255,255,255,0.1); color:white; }
+.nav-item.active { background:rgba(255,255,255,0.2); color:white; }
+.nav-icon { font-size:18px; }
+.nav-badge { margin-left:auto; background:rgba(255,255,255,0.25); border-radius:10px; padding:1px 8px; font-size:11px; font-weight:700; }
+.sidebar-summary { padding:16px 20px; border-top:1px solid rgba(255,255,255,0.1); }
+.ss-label { font-size:11px; opacity:0.6; margin-bottom:4px; }
+.ss-value { font-size:18px; font-weight:700; margin-bottom:4px; }
+.ss-rate { font-size:14px; font-weight:700; }
 
-/* 메인 */
-.main { margin-left: 240px; flex: 1; min-height: 100vh; display: flex; flex-direction: column; }
+.main { margin-left:240px; flex:1; min-height:100vh; display:flex; flex-direction:column; }
+.top-bar { background:white; border-bottom:1px solid #e0e7ff; padding:0 24px; height:60px; display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:40; }
+.hamburger { display:none; background:none; border:none; font-size:22px; cursor:pointer; color:#374151; padding:6px; }
+.page-title { font-size:18px; font-weight:700; color:#1e3a8a; flex:1; }
+.top-actions { display:flex; gap:10px; }
+.btn-refresh { padding:8px 16px; border:1px solid #e0e7ff; border-radius:8px; background:white; color:#2563eb; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.btn-refresh:hover { background:#eff6ff; }
+.btn-refresh:disabled { opacity:0.6; cursor:not-allowed; }
+.btn-add-top { padding:8px 18px; background:#2563eb; color:white; border:none; border-radius:8px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+.btn-add-top:hover { background:#1d4ed8; }
 
-/* 상단 바 */
-.top-bar { background: white; border-bottom: 1px solid #e0e7ff; padding: 0 24px; height: 60px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 40; }
-.hamburger { display: none; background: none; border: none; font-size: 22px; cursor: pointer; color: #374151; padding: 6px; }
-.page-title { font-size: 18px; font-weight: 700; color: #1e3a8a; flex: 1; }
-.top-actions { display: flex; gap: 10px; }
-.btn-refresh { padding: 8px 16px; border: 1px solid #e0e7ff; border-radius: 8px; background: white; color: #2563eb; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-.btn-refresh:hover { background: #eff6ff; }
-.btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-add-top { padding: 8px 18px; background: #2563eb; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
-.btn-add-top:hover { background: #1d4ed8; }
+.content { padding:24px; flex:1; }
+.mt16 { margin-top:16px; }
 
-/* 콘텐츠 */
-.content { padding: 24px; flex: 1; }
-.mt16 { margin-top: 16px; }
+.toast { position:fixed; top:70px; right:20px; background:white; border-radius:20px; padding:8px 18px; font-size:13px; box-shadow:0 4px 14px rgba(0,0,0,0.12); opacity:0; transition:opacity 0.3s; z-index:300; pointer-events:none; }
+.toast.visible { opacity:1; }
 
-/* 토스트 */
-.toast { position: fixed; top: 70px; right: 20px; background: white; border-radius: 20px; padding: 8px 18px; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); opacity: 0; transition: opacity 0.3s; z-index: 300; pointer-events: none; }
-.toast.visible { opacity: 1; }
+.summary-grid { display:grid; grid-template-columns:1.5fr 1fr 1fr; gap:16px; }
+.summary-card { border-radius:16px; padding:20px 24px; color:white; }
+.summary-card.total      { background:linear-gradient(135deg,#1d4ed8,#2563eb); }
+.summary-card.long-card  { background:linear-gradient(135deg,#0891b2,#0284c7); transition:0.15s; }
+.summary-card.long-card:hover  { transform:translateY(-2px); }
+.summary-card.short-card { background:linear-gradient(135deg,#7c3aed,#6d28d9); transition:0.15s; }
+.summary-card.short-card:hover { transform:translateY(-2px); }
+.sc-label { font-size:13px; opacity:0.8; margin-bottom:8px; }
+.sc-value { font-size:28px; font-weight:800; margin-bottom:8px; }
+.sc-value.sm { font-size:22px; }
+.sc-sub { display:flex; justify-content:space-between; font-size:13px; opacity:0.85; margin-bottom:6px; }
+.sc-rate { font-weight:700; }
+.sc-pnl { font-size:16px; font-weight:700; }
 
-/* 요약 카드 */
-.summary-grid { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 16px; }
-.summary-card { border-radius: 16px; padding: 20px 24px; color: white; }
-.summary-card.total      { background: linear-gradient(135deg, #1d4ed8, #2563eb); }
-.summary-card.long-card  { background: linear-gradient(135deg, #0891b2, #0284c7); transition: 0.15s; }
-.summary-card.long-card:hover  { transform: translateY(-2px); }
-.summary-card.short-card { background: linear-gradient(135deg, #7c3aed, #6d28d9); transition: 0.15s; }
-.summary-card.short-card:hover { transform: translateY(-2px); }
-.sc-label { font-size: 13px; opacity: 0.8; margin-bottom: 8px; }
-.sc-value { font-size: 28px; font-weight: 800; margin-bottom: 8px; }
-.sc-value.sm { font-size: 22px; }
-.sc-sub { display: flex; justify-content: space-between; font-size: 13px; opacity: 0.85; margin-bottom: 6px; }
-.sc-rate { font-weight: 700; }
-.sc-pnl { font-size: 16px; font-weight: 700; }
+.card { background:white; border-radius:16px; padding:20px 24px; }
+.card-title { font-size:15px; font-weight:700; color:#1e3a8a; margin-bottom:16px; }
+.invest-header { display:flex; gap:16px; }
 
-/* 카드 */
-.card { background: white; border-radius: 16px; padding: 20px 24px; }
-.card-title { font-size: 15px; font-weight: 700; color: #1e3a8a; margin-bottom: 16px; }
+.table-wrap { overflow-x:auto; }
+.stock-table { width:100%; border-collapse:collapse; font-size:14px; }
+.stock-table th { padding:10px 12px; background:#f8faff; color:#6b7280; font-weight:600; text-align:left; border-bottom:2px solid #e0e7ff; white-space:nowrap; }
+.stock-table td { padding:12px; border-bottom:1px solid #f3f4f6; vertical-align:middle; }
+.stock-table tr:hover td { background:#fafbff; }
+.td-name { display:flex; align-items:center; gap:8px; }
+.color-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.name-text { font-weight:600; color:#111827; }
+.ticker-text { font-size:12px; color:#9ca3af; }
+.type-badge { font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; }
+.type-badge.long  { background:#dbeafe; color:#1d4ed8; }
+.type-badge.short { background:#ede9fe; color:#6d28d9; }
+.price-cell { display:flex; align-items:center; gap:6px; }
+.inline-price-input { width:80px; padding:4px 6px; border:1px solid #e0e7ff; border-radius:6px; font-size:12px; }
+.inline-price-input:focus { outline:none; border-color:#2563eb; }
+.td-actions { display:flex; gap:4px; }
+.btn-sm { padding:4px 10px; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid #e0e7ff; background:white; color:#374151; }
+.btn-sm:hover { background:#f9fafb; }
+.btn-sm.del { color:#dc2626; border-color:#fecaca; }
+.btn-sm.del:hover { background:#fef2f2; }
+.empty-td { text-align:center; color:#9ca3af; padding:40px; }
 
-/* 투자 헤더 */
-.invest-header { display: flex; gap: 16px; }
+.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.full-width { grid-column:1/-1; }
+.chart-wrap { display:flex; align-items:center; gap:24px; }
+.legend { flex:1; }
+.legend-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; }
+.leg-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.leg-name { flex:1; color:#374151; font-weight:500; }
+.leg-pct { font-weight:700; color:#111827; min-width:36px; }
+.leg-val { font-size:12px; color:#9ca3af; min-width:80px; text-align:right; }
+.empty-chart { text-align:center; color:#9ca3af; padding:40px; }
+.bar-chart { display:flex; flex-direction:column; gap:14px; }
+.bar-row { display:flex; align-items:center; gap:12px; }
+.bar-label { display:flex; align-items:center; gap:6px; width:160px; font-size:13px; font-weight:500; flex-shrink:0; }
+.bar-track { flex:1; height:20px; background:#f3f4f6; border-radius:4px; position:relative; overflow:hidden; }
+.bar-fill { position:absolute; height:100%; border-radius:4px; transition:width 0.4s; }
+.bar-center { position:absolute; left:50%; top:0; bottom:0; width:2px; background:#d1d5db; }
+.bar-rate { width:72px; text-align:right; font-size:13px; font-weight:700; flex-shrink:0; }
 
-/* 테이블 */
-.table-wrap { overflow-x: auto; }
-.stock-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.stock-table th { padding: 10px 12px; background: #f8faff; color: #6b7280; font-weight: 600; text-align: left; border-bottom: 2px solid #e0e7ff; white-space: nowrap; }
-.stock-table td { padding: 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
-.stock-table tr:hover td { background: #fafbff; }
-.td-name { display: flex; align-items: center; gap: 8px; }
-.color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.name-text { font-weight: 600; color: #111827; }
-.ticker-text { font-size: 12px; color: #9ca3af; }
-.type-badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
-.type-badge.long  { background: #dbeafe; color: #1d4ed8; }
-.type-badge.short { background: #ede9fe; color: #6d28d9; }
-.price-cell { display: flex; align-items: center; gap: 6px; }
-.inline-price-input { width: 80px; padding: 4px 6px; border: 1px solid #e0e7ff; border-radius: 6px; font-size: 12px; }
-.inline-price-input:focus { outline: none; border-color: #2563eb; }
-.td-actions { display: flex; gap: 4px; }
-.btn-sm { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #e0e7ff; background: white; color: #374151; }
-.btn-sm:hover { background: #f9fafb; }
-.btn-sm.del { color: #dc2626; border-color: #fecaca; }
-.btn-sm.del:hover { background: #fef2f2; }
-.empty-td { text-align: center; color: #9ca3af; padding: 40px; }
+/* 뉴스 */
+.news-layout { display:grid; grid-template-columns:220px 1fr; gap:16px; align-items:start; }
+.news-stock-list { background:white; border-radius:16px; overflow:hidden; }
+.news-stock-btn { display:flex; align-items:center; gap:8px; width:100%; padding:12px 16px; border:none; background:none; cursor:pointer; font-size:13px; font-weight:500; color:#374151; border-bottom:1px solid #f3f4f6; transition:0.15s; }
+.news-stock-btn:hover { background:#f8faff; }
+.news-stock-btn.active { background:#eff6ff; color:#1d4ed8; font-weight:700; }
+.ns-name { flex:1; text-align:left; }
 
-/* 차트 */
-.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.full-width { grid-column: 1 / -1; }
-.chart-wrap { display: flex; align-items: center; gap: 24px; }
-.legend { flex: 1; }
-.legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
-.leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.leg-name { flex: 1; color: #374151; font-weight: 500; }
-.leg-pct { font-weight: 700; color: #111827; min-width: 36px; }
-.leg-val { font-size: 12px; color: #9ca3af; min-width: 80px; text-align: right; }
-.empty-chart { text-align: center; color: #9ca3af; padding: 40px; }
+.news-panel { }
+.news-empty-state { }
+.news-panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+.btn-refresh-news { padding:6px 14px; border:1px solid #e0e7ff; border-radius:8px; background:white; color:#6b7280; font-size:12px; cursor:pointer; }
+.btn-refresh-news:hover { background:#f8faff; }
 
-/* 바차트 */
-.bar-chart { display: flex; flex-direction: column; gap: 14px; }
-.bar-row { display: flex; align-items: center; gap: 12px; }
-.bar-label { display: flex; align-items: center; gap: 6px; width: 160px; font-size: 13px; font-weight: 500; flex-shrink: 0; }
-.bar-track { flex: 1; height: 20px; background: #f3f4f6; border-radius: 4px; position: relative; overflow: hidden; }
-.bar-fill { position: absolute; height: 100%; border-radius: 4px; transition: width 0.4s; }
-.bar-center { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: #d1d5db; }
-.bar-rate { width: 72px; text-align: right; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+.news-loading { display:flex; align-items:center; gap:10px; padding:30px 0; color:#6b7280; font-size:14px; }
+.news-list { display:flex; flex-direction:column; gap:0; }
+.news-item { display:flex; align-items:flex-start; gap:12px; padding:14px 0; border-bottom:1px solid #f3f4f6; }
+.news-item:last-child { border-bottom:none; }
+.news-item-main { flex:1; min-width:0; }
+.news-title { display:block; font-size:14px; font-weight:600; color:#111827; text-decoration:none; line-height:1.5; margin-bottom:6px; }
+.news-title:hover { color:#2563eb; text-decoration:underline; }
+.news-meta { display:flex; align-items:center; gap:10px; font-size:12px; color:#9ca3af; flex-wrap:wrap; }
+.news-source { font-weight:600; color:#6b7280; }
+.news-time { }
+.news-saved-at { color:#c4b5fd; }
+.bookmark-btn { flex-shrink:0; background:none; border:1px solid #e0e7ff; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:16px; transition:0.15s; color:#9ca3af; }
+.bookmark-btn:hover { background:#fef9f0; border-color:#fbbf24; }
+.bookmark-btn.saved { border-color:#7c3aed; background:#faf5ff; }
 
-/* 모달 */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
-.modal { background: white; border-radius: 20px; padding: 28px; width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; }
-.modal h3 { font-size: 18px; font-weight: 700; color: #1e3a8a; margin-bottom: 20px; }
-.form-row { display: flex; gap: 16px; margin-bottom: 16px; }
-.form-group { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.form-group label { font-size: 12px; font-weight: 600; color: #6b7280; }
-.input-field { width: 100%; padding: 11px 13px; border: 1px solid #e0e7ff; border-radius: 10px; font-size: 14px; background: #f8faff; }
-.input-field:focus { outline: none; border-color: #2563eb; background: white; }
-.type-select { display: flex; gap: 8px; }
-.type-select button { flex: 1; padding: 10px; border: 2px solid #e0e7ff; border-radius: 10px; background: white; font-size: 13px; font-weight: 600; cursor: pointer; color: #6b7280; }
-.type-select button.active { border-color: #2563eb; background: #eff6ff; color: #2563eb; }
-.modal-btns { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; }
-.btn-cancel { padding: 11px 24px; border: 1px solid #e0e7ff; border-radius: 10px; cursor: pointer; background: white; font-size: 14px; color: #6b7280; }
-.btn-primary { padding: 11px 28px; background: #2563eb; color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; }
-.btn-primary:disabled { opacity: 0.6; }
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
+.modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow-y:auto; }
+.modal h3 { font-size:18px; font-weight:700; color:#1e3a8a; margin-bottom:20px; }
+.form-row { display:flex; gap:16px; margin-bottom:16px; }
+.form-group { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.form-group label { font-size:12px; font-weight:600; color:#6b7280; }
+.input-field { width:100%; padding:11px 13px; border:1px solid #e0e7ff; border-radius:10px; font-size:14px; background:#f8faff; }
+.input-field:focus { outline:none; border-color:#2563eb; background:white; }
+.type-select { display:flex; gap:8px; }
+.type-select button { flex:1; padding:10px; border:2px solid #e0e7ff; border-radius:10px; background:white; font-size:13px; font-weight:600; cursor:pointer; color:#6b7280; }
+.type-select button.active { border-color:#2563eb; background:#eff6ff; color:#2563eb; }
+.modal-btns { display:flex; gap:10px; margin-top:20px; justify-content:flex-end; }
+.btn-cancel { padding:11px 24px; border:1px solid #e0e7ff; border-radius:10px; cursor:pointer; background:white; font-size:14px; color:#6b7280; }
+.btn-primary { padding:11px 28px; background:#2563eb; color:white; border:none; border-radius:10px; font-size:14px; font-weight:700; cursor:pointer; }
+.btn-primary:disabled { opacity:0.6; }
 
-/* 색상 */
-.profit { color: #ef4444; }
-.loss   { color: #2563eb; }
+.profit { color:#ef4444; }
+.loss   { color:#2563eb; }
+.side-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:49; }
 
-/* 모바일 대응 */
-@media (max-width: 768px) {
-  .sidebar { transform: translateX(-100%); }
-  .sidebar.open { transform: translateX(0); }
-  .side-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 49; }
-  .main { margin-left: 0; }
-  .hamburger { display: block; }
-  .summary-grid { grid-template-columns: 1fr; }
-  .chart-grid { grid-template-columns: 1fr; }
-  .form-row { flex-direction: column; }
-  .top-actions { gap: 6px; }
-  .btn-refresh { display: none; }
+@media (max-width:768px) {
+  .sidebar { transform:translateX(-100%); }
+  .sidebar.open { transform:translateX(0); }
+  .main { margin-left:0; }
+  .hamburger { display:block; }
+  .summary-grid { grid-template-columns:1fr; }
+  .chart-grid { grid-template-columns:1fr; }
+  .form-row { flex-direction:column; }
+  .top-actions { gap:6px; }
+  .btn-refresh { display:none; }
+  .news-layout { grid-template-columns:1fr; }
 }
 </style>
