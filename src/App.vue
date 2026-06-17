@@ -137,7 +137,10 @@ const login = async () => {
   try {
     const res = await fetch(EDGE_FUNCTION_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}`
+      },
       body: JSON.stringify({ password: inputPassword.value, app: 'stock' })
     })
     const { ok } = await res.json()
