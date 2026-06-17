@@ -36,6 +36,35 @@ const bookmarkedIds   = ref(new Set())
 // ── 폼
 const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', current_price:'', memo:'', type:'long' })
 
+// ── 종목 검색 자동완성
+const searchResults = ref([])
+const searchLoading = ref(false)
+let searchTimer = null
+
+const searchStock = async (query) => {
+  if (!query || query.trim().length < 1) { searchResults.value = []; return }
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(async () => {
+    searchLoading.value = true
+    try {
+      const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&lang=ko-KR&region=KR&quotesCount=6&newsCount=0&enableFuzzyQuery=false`
+      const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`
+      const res  = await fetch(proxy)
+      const data = await res.json()
+      searchResults.value = (data?.quotes ?? []).filter(q => q.symbol && q.quoteType === 'EQUITY').slice(0, 6)
+    } catch { searchResults.value = [] }
+    searchLoading.value = false
+  }, 350)
+}
+
+const selectSearchResult = (result, stock) => {
+  stock.name   = result.shortname || result.longname || stock.name
+  stock.ticker = result.symbol
+  searchResults.value = []
+}
+
+const clearSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
+
 let toastTimer = null
 const setToast = (s) => {
   saveStatus.value = s
@@ -661,9 +690,21 @@ const scrapByStock = computed(() => {
         <div class="modal">
           <h3>종목 추가</h3>
           <div class="form-row">
-            <div class="form-group"><label>종목명 *</label><input v-model="newStock.name" placeholder="삼성전자" class="input-field" /></div>
+            <div class="form-group" style="position:relative">
+              <label>종목명 *</label>
+              <input v-model="newStock.name" placeholder="삼성전자" class="input-field"
+                @input="searchStock(newStock.name)" @blur="clearSearch" />
+              <div v-if="searchResults.length > 0 || searchLoading" class="search-dropdown">
+                <div v-if="searchLoading" class="search-loading">🔍 검색 중...</div>
+                <div v-for="r in searchResults" :key="r.symbol" class="search-item"
+                  @mousedown.prevent="selectSearchResult(r, newStock)">
+                  <div class="si-name">{{ r.shortname || r.longname }}</div>
+                  <div class="si-ticker">{{ r.symbol }}</div>
+                </div>
+              </div>
+            </div>
             <div class="form-group">
-              <label>티커 <span class="label-opt">(현재가 자동 조회용)</span></label>
+              <label>티커 <span class="label-opt">(자동입력 또는 직접입력)</span></label>
               <input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" />
               <div class="field-hint">
                 📌 야후파이낸스 티커 형식<br>
@@ -701,9 +742,21 @@ const scrapByStock = computed(() => {
         <div class="modal">
           <h3>종목 수정</h3>
           <div class="form-row">
-            <div class="form-group"><label>종목명</label><input v-model="editStock.name" class="input-field" /></div>
+            <div class="form-group" style="position:relative">
+              <label>종목명</label>
+              <input v-model="editStock.name" class="input-field"
+                @input="searchStock(editStock.name)" @blur="clearSearch" />
+              <div v-if="searchResults.length > 0 || searchLoading" class="search-dropdown">
+                <div v-if="searchLoading" class="search-loading">🔍 검색 중...</div>
+                <div v-for="r in searchResults" :key="r.symbol" class="search-item"
+                  @mousedown.prevent="selectSearchResult(r, editStock)">
+                  <div class="si-name">{{ r.shortname || r.longname }}</div>
+                  <div class="si-ticker">{{ r.symbol }}</div>
+                </div>
+              </div>
+            </div>
             <div class="form-group">
-              <label>티커 <span class="label-opt">(현재가 자동 조회용)</span></label>
+              <label>티커 <span class="label-opt">(자동입력 또는 직접입력)</span></label>
               <input v-model="editStock.ticker" placeholder="005930.KS" class="input-field" />
               <div class="field-hint">
                 📌 야후파이낸스 티커 형식<br>
@@ -891,6 +944,13 @@ const scrapByStock = computed(() => {
 .btn-primary { padding:11px 28px; background:#2563eb; color:white; border:none; border-radius:10px; font-size:14px; font-weight:700; cursor:pointer; }
 .btn-primary:disabled { opacity:0.6; }
 .label-opt { font-weight:400; color:#9ca3af; }
+.search-dropdown { position:absolute; top:100%; left:0; right:0; background:white; border:1px solid #e0e7ff; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.12); z-index:100; overflow:hidden; margin-top:4px; }
+.search-loading { padding:12px 16px; font-size:13px; color:#9ca3af; }
+.search-item { display:flex; align-items:center; justify-content:space-between; padding:10px 16px; cursor:pointer; border-bottom:1px solid #f3f4f6; transition:0.1s; }
+.search-item:last-child { border-bottom:none; }
+.search-item:hover { background:#eff6ff; }
+.si-name { font-size:13px; font-weight:600; color:#111827; }
+.si-ticker { font-size:12px; color:#2563eb; font-weight:700; background:#dbeafe; padding:2px 8px; border-radius:6px; }
 .field-hint { margin-top:6px; padding:10px 12px; background:#f8faff; border:1px solid #e0e7ff; border-radius:8px; font-size:12px; color:#6b7280; line-height:1.8; }
 .field-hint code { background:#e0e7ff; color:#2563eb; padding:1px 5px; border-radius:4px; font-size:11px; }
 
