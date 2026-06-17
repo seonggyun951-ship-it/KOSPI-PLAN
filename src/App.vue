@@ -7,7 +7,7 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_KEY
 )
 
-const APP_PASSWORD = 'tjdrbs123!@#'
+const EDGE_FUNCTION_URL = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/smooth-action'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
 const STOCK_DB = [
@@ -134,10 +134,18 @@ const setToast = (s) => {
 
 // ── 로그인
 const login = async () => {
-  if (inputPassword.value === APP_PASSWORD) {
-    isAuthorized.value = true
-    await fetchAll()
-  } else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
+  try {
+    const res = await fetch(EDGE_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: inputPassword.value, app: 'stock' })
+    })
+    const { ok } = await res.json()
+    if (ok) {
+      isAuthorized.value = true
+      await fetchAll()
+    } else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
+  } catch { alert('인증 서버 오류, 다시 시도해주세요.') }
 }
 
 // ── 데이터 불러오기
