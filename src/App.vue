@@ -8,10 +8,10 @@ const supabase = createClient(
 )
 
 const STOCK_COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
-const APP_PASSWORD = 'tjdrbsalswl123'
+const APP_PASSWORD = 'tjdrbs123!@#'
 
 // ── 인증 ────────────────────────────────────────────────────
-const isAuthorized = ref(false)
+const isAuthorized = ref(localStorage.getItem('stock_auth') === 'true')
 const inputPassword = ref('')
 
 // ── 데이터 ──────────────────────────────────────────────────
@@ -35,8 +35,11 @@ const setToast = (s) => {
 
 // ── 로그인 ──────────────────────────────────────────────────
 const login = async () => {
-  if (inputPassword.value === APP_PASSWORD) { isAuthorized.value = true; await fetchAll() }
-  else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
+  if (inputPassword.value === APP_PASSWORD) {
+    isAuthorized.value = true
+    localStorage.setItem('stock_auth', 'true')
+    await fetchAll()
+  } else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
 }
 
 // ── 데이터 불러오기 ──────────────────────────────────────────
@@ -111,7 +114,8 @@ const updatePrice = async (stock, newPrice) => {
 
 // ── 실시간 동기화 ────────────────────────────────────────────
 let channel
-onMounted(() => {
+onMounted(async () => {
+  if (isAuthorized.value) await fetchAll()
   channel = supabase.channel('stock-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'stock_items' }, (p) => {
       if (p.eventType==='INSERT') { if (!stocks.value.find(s=>s.id===p.new.id)) stocks.value.push(p.new) }
