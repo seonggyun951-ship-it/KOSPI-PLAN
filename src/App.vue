@@ -263,8 +263,8 @@ const addStock = async () => {
   if (!newStock.value.name.trim()) return
   setToast('saving')
   const payload = {
-    name:          newStock.value.name.trim(),
-    ticker:        newStock.value.ticker.trim(),
+    name:          newStock.value.name?.trim() ?? '',
+    ticker:        newStock.value.ticker?.trim() ?? '',
     quantity:      Number(newStock.value.quantity)      || 0,
     avg_price:     Number(newStock.value.avg_price) || 0,
     current_price: 0,
@@ -287,7 +287,7 @@ const addStock = async () => {
 const saveEdit = async () => {
   setToast('saving')
   const { id, created_at, ...fields } = editStock.value
-  const payload = { ...fields, name: fields.name?.trim(), quantity: Number(fields.quantity)||0, avg_price: Number(fields.avg_price)||0, current_price: Number(fields.current_price)||0 }
+  const payload = { ...fields, name: fields.name?.trim() ?? '', ticker: fields.ticker?.trim() ?? '', quantity: Number(fields.quantity)||0, avg_price: Number(fields.avg_price)||0, current_price: Number(fields.current_price)||0 }
   const { error } = await supabase.from('stock_items').update(payload).eq('id', id)
   if (!error) {
     const idx = stocks.value.findIndex(s => s.id === id)
