@@ -1344,11 +1344,44 @@ const scrapByStock = computed(() => {
   .sidebar.open { transform:translateX(0); }
   .main { margin-left:0; }
   .hamburger { display:block; }
-  .summary-grid { grid-template-columns:1fr; }
+  .summary-grid { grid-template-columns:1fr; gap:8px; }
   .chart-grid { grid-template-columns:1fr; }
   .form-row { flex-direction:column; }
   .top-actions { gap:6px; }
   .btn-refresh { display:none; }
   .news-layout { grid-template-columns:1fr; }
+
+  /* 전체 여백 축소 */
+  .content { padding:12px; }
+  .card { padding:14px 14px; }
+  .card-title { font-size:13px; margin-bottom:10px; }
+  .mt16 { margin-top:10px; }
+
+  /* 상단바 */
+  .top-bar { height:50px; padding:0 12px; }
+  .page-title { font-size:15px; }
+  .btn-add-top { padding:6px 12px; font-size:12px; }
+
+  /* 요약 카드 */
+  .summary-card { padding:14px 16px; }
+  .sc-value { font-size:20px; }
+  .sc-value.sm { font-size:17px; }
+  .sc-label { font-size:12px; margin-bottom:4px; }
+  .sc-pnl { font-size:13px; }
+
+  /* 테이블 */
+  .stock-table { font-size:12px; }
+  .stock-table th, .stock-table td { padding:8px 6px; }
+
+  /* 모달 */
+  .modal { padding:20px 16px; }
+  .modal h3 { font-size:16px; margin-bottom:14px; }
+
+  /* 사이드바 요약 */
+  .ss-value { font-size:15px; }
+
+  /* 심 헤더 */
+  .sim-header { flex-direction:column; }
+  .sim-actions { flex-direction:row; }
 }
 </style>
