@@ -9,6 +9,7 @@ const supabase = createClient(
 
 const EDGE_FUNCTION_URL  = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/smooth-action'
 const KIS_PRICE_URL     = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/kis-price'
+const NEWS_FETCH_URL    = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/news-fetch'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
 const STOCK_DB = [
@@ -162,6 +163,7 @@ const showAdd    = ref(false)
 const editStock  = ref(null)
 const refreshing = ref(false)
 const sideOpen   = ref(false)
+const isMobile   = ref(window.innerWidth <= 768)
 
 // ── 뉴스
 const newsMap         = ref({})   // { 종목명: [기사...] }
@@ -300,19 +302,16 @@ const fetchNews = async (stockName) => {
   if (newsMap.value[stockName]) return
   newsLoading.value[stockName] = true
   try {
-    const query   = encodeURIComponent(`${stockName} 주식`)
-    const rssUrl  = `https://news.google.com/rss/search?q=${query}&hl=ko&gl=KR&ceid=KR:ko`
-    const proxy   = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`
-    const res     = await fetch(proxy)
-    const text    = await res.text()
-    const xml     = new DOMParser().parseFromString(text, 'text/xml')
-    const items   = Array.from(xml.querySelectorAll('item')).slice(0, 12)
-    newsMap.value[stockName] = items.map(item => ({
-      title:   item.querySelector('title')?.textContent?.replace(/ - [^-]+$/, '') ?? '',
-      url:     item.querySelector('link')?.textContent ?? '',
-      pubDate: item.querySelector('pubDate')?.textContent ?? '',
-      source:  item.querySelector('source')?.textContent ?? ''
-    }))
+    const allStocks = [...stocks.value, ...longStocks.value, ...shortStocks.value]
+    const stock     = allStocks.find(s => s.name === stockName)
+    const isKorean  = stock?.type !== 'us'
+    const q         = isKorean ? `${stockName} 주식` : stockName
+    const res = await fetch(NEWS_FETCH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}` },
+      body: JSON.stringify({ q, isKorean })
+    })
+    newsMap.value[stockName] = await res.json()
   } catch { newsMap.value[stockName] = [] }
   newsLoading.value[stockName] = false
 }
@@ -416,8 +415,11 @@ const quickUpdatePrice = async (stock, val) => {
 }
 
 // ── 실시간
+const onResize = () => { isMobile.value = window.innerWidth <= 768 }
+
 let channel
 onMounted(async () => {
+  window.addEventListener('resize', onResize)
   if (isAuthorized.value) await fetchAll()
   channel = supabase.channel('stock-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'stock_items' }, (p) => {
@@ -427,6 +429,7 @@ onMounted(async () => {
     }).subscribe()
 })
 onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
   if (channel) supabase.removeChannel(channel)
   if (toastTimer) clearTimeout(toastTimer)
 })
@@ -692,38 +695,41 @@ const scrapByStock = computed(() => {
 
               <div class="card mt16">
                 <div class="card-title">전체 종목 ({{ stocks.length }}개)</div>
-                <div class="table-wrap">
+                <!-- PC 테이블 -->
+                <div v-if="!isMobile" class="table-wrap">
                   <table class="stock-table">
                     <thead>
                       <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in stocks" :key="s.id">
-                        <td>
-                          <div class="td-name">
-                            <span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span>
-                            <div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div>
-                          </div>
-                        </td>
+                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td><span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
-                        <td>
-                          <span>{{ fmt(s.current_price) }}원</span>
-                        </td>
+                        <td>{{ fmt(s.current_price) }}원</td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td>
-                          <div class="td-actions">
-                            <button @click="editStock={...s}" class="btn-sm">수정</button>
-                            <button @click="deleteStock(s.id)" class="btn-sm del">삭제</button>
-                          </div>
-                        </td>
+                        <td><div class="td-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
                       <tr v-if="stocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
+                </div>
+                <!-- 모바일 카드 -->
+                <div v-else class="ms-list">
+                  <div v-for="(s,i) in stocks" :key="s.id" class="ms-card">
+                    <div class="ms-top">
+                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
+                      <span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span>
+                    </div>
+                    <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
+                    <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
+                    <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
+                    <div class="ms-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
+                  </div>
+                  <div v-if="stocks.length===0" class="empty-td">종목을 추가해보세요</div>
                 </div>
               </div>
             </template>
@@ -745,37 +751,39 @@ const scrapByStock = computed(() => {
               </div>
               <div class="card mt16">
                 <div class="card-title">{{ tab==='long'?'장기':'단기' }} 종목 ({{ (tab==='long'?longStocks:shortStocks).length }}개)</div>
-                <div class="table-wrap">
+                <!-- PC 테이블 -->
+                <div v-if="!isMobile" class="table-wrap">
                   <table class="stock-table">
                     <thead>
                       <tr><th>종목명</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in (tab==='long'?longStocks:shortStocks)" :key="s.id">
-                        <td>
-                          <div class="td-name">
-                            <span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span>
-                            <div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div>
-                          </div>
-                        </td>
+                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
-                        <td>
-                          <span>{{ fmt(s.current_price) }}원</span>
-                        </td>
+                        <td>{{ fmt(s.current_price) }}원</td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td>
-                          <div class="td-actions">
-                            <button @click="editStock={...s}" class="btn-sm">수정</button>
-                            <button @click="deleteStock(s.id)" class="btn-sm del">삭제</button>
-                          </div>
-                        </td>
+                        <td><div class="td-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
                       <tr v-if="(tab==='long'?longStocks:shortStocks).length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
+                </div>
+                <!-- 모바일 카드 -->
+                <div v-else class="ms-list">
+                  <div v-for="(s,i) in (tab==='long'?longStocks:shortStocks)" :key="s.id" class="ms-card">
+                    <div class="ms-top">
+                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
+                    </div>
+                    <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
+                    <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
+                    <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
+                    <div class="ms-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
+                  </div>
+                  <div v-if="(tab==='long'?longStocks:shortStocks).length===0" class="empty-td">종목을 추가해보세요</div>
                 </div>
               </div>
             </template>
@@ -1342,7 +1350,7 @@ const scrapByStock = computed(() => {
 @media (max-width:768px) {
   .sidebar { transform:translateX(-100%); }
   .sidebar.open { transform:translateX(0); }
-  .main { margin-left:0; }
+  .main { margin-left:0; overflow-x:hidden; }
   .hamburger { display:block; }
   .summary-grid { grid-template-columns:1fr; gap:8px; }
   .chart-grid { grid-template-columns:1fr; }
@@ -1351,9 +1359,16 @@ const scrapByStock = computed(() => {
   .btn-refresh { display:none; }
   .news-layout { grid-template-columns:1fr; }
 
+  /* 가로 스크롤 제거 */
+  .root, .layout, .content { overflow-x:hidden; max-width:100vw; }
+  .table-wrap { overflow-x:hidden; }
+
+  /* 테이블 - 모바일에서 컬럼 숨기기 */
+  .stock-table .hide-mobile { display:none; }
+
   /* 전체 여백 축소 */
   .content { padding:12px; }
-  .card { padding:14px 14px; }
+  .card { padding:14px 12px; }
   .card-title { font-size:13px; margin-bottom:10px; }
   .mt16 { margin-top:10px; }
 
@@ -1371,7 +1386,7 @@ const scrapByStock = computed(() => {
 
   /* 테이블 */
   .stock-table { font-size:12px; }
-  .stock-table th, .stock-table td { padding:8px 6px; }
+  .stock-table th, .stock-table td { padding:8px 4px; }
 
   /* 모달 */
   .modal { padding:20px 16px; }
@@ -1383,5 +1398,13 @@ const scrapByStock = computed(() => {
   /* 심 헤더 */
   .sim-header { flex-direction:column; }
   .sim-actions { flex-direction:row; }
+
+  /* 모바일 카드 목록 */
+  .ms-list { display:flex; flex-direction:column; gap:12px; }
+  .ms-card { background:#252540; border:1px solid #3a3a5c; border-radius:12px; padding:14px 16px; }
+  .ms-top { display:flex; align-items:center; gap:8px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid #3a3a5c; }
+  .ms-row { display:grid; grid-template-columns:44px 1fr 44px 1fr; align-items:center; gap:3px 10px; margin-bottom:7px; font-size:13.5px; color:#e0e0f0; }
+  .ms-lbl { color:#7a8aaa; font-size:11px; white-space:nowrap; }
+  .ms-actions { display:flex; gap:8px; margin-top:12px; padding-top:10px; border-top:1px solid #3a3a5c; justify-content:flex-end; }
 }
 </style>
