@@ -885,8 +885,8 @@ const scrapByStock = computed(() => {
                 <div class="empty-chart">종목을 먼저 추가해보세요</div>
               </div>
               <div v-else class="news-layout">
-                <!-- 종목 목록 -->
-                <div class="news-stock-list">
+                <!-- 종목 목록 (모바일: 종목 선택 후 숨김) -->
+                <div v-if="!isMobile || !selectedStock" class="news-stock-list">
                   <div class="card-title" style="padding:16px 16px 8px">보유 종목</div>
                   <button v-for="(s,i) in stocks" :key="s.id"
                     class="news-stock-btn" :class="{ active: selectedStock===s.name }"
@@ -908,6 +908,7 @@ const scrapByStock = computed(() => {
                   </div>
 
                   <div v-else class="card">
+                    <button v-if="isMobile" @click="selectedStock=null" class="news-back-btn">← 종목 목록</button>
                     <div class="news-panel-header">
                       <div class="card-title" style="margin:0">📰 {{ selectedStock }} 뉴스</div>
                       <div class="news-sort-btns">
@@ -1349,6 +1350,7 @@ const scrapByStock = computed(() => {
 .bookmark-btn { flex-shrink:0; background:none; border:1px solid #e0e7ff; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:16px; transition:0.15s; color:#9ca3af; }
 .bookmark-btn:hover { background:#fef9f0; border-color:#fbbf24; }
 .bookmark-btn.saved { border-color:#7c3aed; background:#faf5ff; }
+.news-back-btn { display:none; }
 .news-sort-btns { display:flex; gap:4px; }
 .sort-btn { background:none; border:1px solid #3a3a5c; color:#888; border-radius:6px; padding:4px 12px; font-size:12px; cursor:pointer; transition:0.15s; }
 .sort-btn.active { background:#6c47ff; border-color:#6c47ff; color:#fff; }
@@ -1405,6 +1407,8 @@ const scrapByStock = computed(() => {
   .top-actions { gap:6px; }
   .btn-refresh { display:none; }
   .news-layout { grid-template-columns:1fr; }
+  .news-back-btn { display:block; background:none; border:none; color:#7c6aff; font-size:13px; font-weight:600; padding:0 0 12px; cursor:pointer; }
+  .news-panel-header { flex-wrap:wrap; gap:8px; }
 
   /* 가로 스크롤 제거 */
   .root, .layout, .content { overflow-x:hidden; max-width:100vw; }
