@@ -1452,6 +1452,8 @@ const scrapByStock = computed(() => {
 
   /* 모바일 카드 목록 */
   .ms-list { display:flex; flex-direction:column; gap:12px; }
+  .ms-card .name-text { color:#f0f0ff; }
+  .ms-card .ticker-text { color:#8899bb; }
   .ms-card { background:#252540; border:1px solid #3a3a5c; border-radius:12px; padding:14px 16px; }
   .ms-top { display:flex; align-items:center; gap:8px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid #3a3a5c; }
   .ms-row { display:grid; grid-template-columns:44px 1fr 44px 1fr; align-items:center; gap:3px 10px; margin-bottom:7px; font-size:13.5px; color:#e0e0f0; }
