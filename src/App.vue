@@ -305,14 +305,11 @@ const fetchNews = async (stockName, sort = newsSort.value) => {
   if (newsMap.value[stockName]?.[sort]) return
   newsLoading.value[stockName] = true
   try {
-    const allStocks = [...stocks.value, ...longStocks.value, ...shortStocks.value]
-    const stock     = allStocks.find(s => s.name === stockName)
-    const isKorean  = stock?.type !== 'us'
-    const q         = isKorean ? `${stockName} 주식` : stockName
+    const q   = `${stockName} 주식`
     const res = await fetch(NEWS_FETCH_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}` },
-      body: JSON.stringify({ q, isKorean, sort })
+      body: JSON.stringify({ q, sort })
     })
     if (!newsMap.value[stockName]) newsMap.value[stockName] = {}
     newsMap.value[stockName][sort] = await res.json()
