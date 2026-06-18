@@ -172,6 +172,16 @@ const bookmarkedIds   = ref(new Set())
 // ── 폼
 const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' })
 
+// ── 모의투자
+const simBalance  = ref(0)
+const simHoldings = ref([])
+const simTrades   = ref([])
+const showSimBuy  = ref(false)
+const simSellTarget = ref(null)
+const simBuyForm  = ref({ name:'', ticker:'', quantity:'', price:'' })
+const simSellForm = ref({ quantity:'', price:'' })
+const simSearchResults = ref([])
+
 // ── 종목 검색 자동완성
 const searchResults = ref([])
 const searchLoading = ref(false)
@@ -223,15 +233,21 @@ const login = async () => {
 const fetchAll = async () => {
   loading.value = true
   try {
-    const [stockRes, newsRes] = await Promise.all([
+    const [stockRes, newsRes, balRes, holdRes, tradeRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
-      supabase.from('saved_news').select('*').order('created_at', { ascending: false })
+      supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
+      supabase.from('sim_balance').select('*').eq('id', 1).single(),
+      supabase.from('sim_holdings').select('*').order('created_at'),
+      supabase.from('sim_trades').select('*').order('traded_at', { ascending: false })
     ])
     if (stockRes.data) stocks.value = stockRes.data
     if (newsRes.data)  {
       savedNews.value = newsRes.data
       bookmarkedIds.value = new Set(newsRes.data.map(n => n.url))
     }
+    if (balRes.data)   simBalance.value  = balRes.data.cash
+    if (holdRes.data)  simHoldings.value = holdRes.data
+    if (tradeRes.data) simTrades.value   = tradeRes.data
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
@@ -473,6 +489,78 @@ const fmt     = n => Number(n||0).toLocaleString()
 const fmtRate = r => (r >= 0 ? '+' : '') + Number(r).toFixed(2) + '%'
 const isProfit= r => r >= 0
 
+// ── 모의투자 계산
+const simHoldingValue = computed(() => simHoldings.value.reduce((s, h) => s + h.quantity * h.avg_price, 0))
+const simTotalAsset   = computed(() => simBalance.value + simHoldingValue.value)
+
+const simSearchStock = (q) => {
+  if (!q || q.trim().length < 1) { simSearchResults.value = []; return }
+  const query = q.trim().toLowerCase()
+  simSearchResults.value = STOCK_DB.filter(s => s.name.toLowerCase().includes(query) || s.ticker.toLowerCase().includes(query)).slice(0, 6)
+}
+
+const simBuy = async () => {
+  const qty   = Number(simBuyForm.value.quantity)
+  const price = Number(simBuyForm.value.price)
+  if (!simBuyForm.value.name || !qty || !price) return alert('종목명, 수량, 가격을 입력해주세요')
+  const total = qty * price
+  if (total > simBalance.value) return alert(`잔고 부족! (필요: ${fmt(total)}원, 보유: ${fmt(simBalance.value)}원)`)
+
+  const existing = simHoldings.value.find(h => h.name === simBuyForm.value.name)
+  if (existing) {
+    const newQty  = existing.quantity + qty
+    const newAvg  = Math.round((existing.quantity * existing.avg_price + qty * price) / newQty)
+    await supabase.from('sim_holdings').update({ quantity: newQty, avg_price: newAvg }).eq('id', existing.id)
+    existing.quantity = newQty; existing.avg_price = newAvg
+  } else {
+    const { data } = await supabase.from('sim_holdings').insert({ name: simBuyForm.value.name, ticker: simBuyForm.value.ticker, quantity: qty, avg_price: price }).select().single()
+    if (data) simHoldings.value.push(data)
+  }
+  const newCash = simBalance.value - total
+  await supabase.from('sim_balance').update({ cash: newCash }).eq('id', 1)
+  simBalance.value = newCash
+  await supabase.from('sim_trades').insert({ name: simBuyForm.value.name, ticker: simBuyForm.value.ticker, type:'buy', quantity: qty, price, total })
+  const { data: t } = await supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }).limit(1).single()
+  if (t) simTrades.value.unshift(t)
+  simBuyForm.value = { name:'', ticker:'', quantity:'', price:'' }
+  showSimBuy.value = false
+}
+
+const simSell = async () => {
+  const h     = simSellTarget.value
+  const qty   = Number(simSellForm.value.quantity)
+  const price = Number(simSellForm.value.price)
+  if (!qty || !price) return alert('수량과 가격을 입력해주세요')
+  if (qty > h.quantity) return alert(`보유 수량 초과! (보유: ${h.quantity}주)`)
+  const total = qty * price
+
+  if (qty === h.quantity) {
+    await supabase.from('sim_holdings').delete().eq('id', h.id)
+    simHoldings.value = simHoldings.value.filter(x => x.id !== h.id)
+  } else {
+    await supabase.from('sim_holdings').update({ quantity: h.quantity - qty }).eq('id', h.id)
+    h.quantity -= qty
+  }
+  const newCash = simBalance.value + total
+  await supabase.from('sim_balance').update({ cash: newCash }).eq('id', 1)
+  simBalance.value = newCash
+  await supabase.from('sim_trades').insert({ name: h.name, ticker: h.ticker, type:'sell', quantity: qty, price, total })
+  const { data: t } = await supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }).limit(1).single()
+  if (t) simTrades.value.unshift(t)
+  simSellTarget.value = null
+  simSellForm.value = { quantity:'', price:'' }
+}
+
+const simReset = async () => {
+  if (!confirm('모의투자를 초기화할까요? (잔고 1000만원으로 리셋)')) return
+  await Promise.all([
+    supabase.from('sim_balance').update({ cash: 10000000 }).eq('id', 1),
+    supabase.from('sim_holdings').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+    supabase.from('sim_trades').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+  ])
+  simBalance.value = 10000000; simHoldings.value = []; simTrades.value = []
+}
+
 // 스크랩 종목별 그룹
 const scrapByStock = computed(() => {
   const map = {}
@@ -519,6 +607,7 @@ const scrapByStock = computed(() => {
               { key:'chart',     icon:'📊', label:'차트'      },
               { key:'news',      icon:'📰', label:'뉴스'      },
               { key:'scrap',     icon:'🔖', label:'스크랩', badge: savedNews.length || null },
+              { key:'sim',       icon:'🎮', label:'모의투자' },
             ]" :key="item.key"
               class="nav-item" :class="{ active: tab===item.key }"
               @click="tab=item.key; sideOpen=false">
@@ -833,6 +922,133 @@ const scrapByStock = computed(() => {
               </div>
             </template>
 
+            <!-- ── 모의투자 ── -->
+            <template v-if="tab==='sim'">
+              <div class="sim-header">
+                <div class="summary-card total">
+                  <div class="sc-label">총 자산</div>
+                  <div class="sc-value">{{ fmt(Math.round(simTotalAsset)) }}원</div>
+                  <div class="sc-sub">
+                    <span>현금 {{ fmt(simBalance) }}원</span>
+                    <span>보유주식 {{ fmt(Math.round(simHoldingValue)) }}원</span>
+                  </div>
+                </div>
+                <div class="sim-actions">
+                  <button class="btn-add-top" @click="showSimBuy=true">📈 매수</button>
+                  <button class="btn-cancel" style="font-size:13px" @click="simReset">초기화</button>
+                </div>
+              </div>
+
+              <div class="card mt16">
+                <div class="card-title">보유 종목</div>
+                <div class="table-wrap">
+                  <table class="stock-table">
+                    <thead><tr><th>종목명</th><th>수량</th><th>평균단가</th><th>평가금액</th><th></th></tr></thead>
+                    <tbody>
+                      <tr v-for="h in simHoldings" :key="h.id">
+                        <td><div class="td-name"><div><div class="name-text">{{ h.name }}</div><div v-if="h.ticker" class="ticker-text">{{ h.ticker }}</div></div></div></td>
+                        <td>{{ fmt(h.quantity) }}주</td>
+                        <td>{{ fmt(h.avg_price) }}원</td>
+                        <td>{{ fmt(h.quantity * h.avg_price) }}원</td>
+                        <td><button class="btn-sm del" @click="simSellTarget=h; simSellForm={quantity:'',price:''}">매도</button></td>
+                      </tr>
+                      <tr v-if="simHoldings.length===0"><td colspan="5" class="empty-td">보유 종목이 없어요</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card mt16">
+                <div class="card-title">거래 내역</div>
+                <div class="table-wrap">
+                  <table class="stock-table">
+                    <thead><tr><th>일시</th><th>종목</th><th>구분</th><th>수량</th><th>가격</th><th>금액</th></tr></thead>
+                    <tbody>
+                      <tr v-for="t in simTrades" :key="t.id">
+                        <td style="font-size:12px;color:#9ca3af">{{ new Date(t.traded_at).toLocaleDateString('ko-KR') }}</td>
+                        <td><div class="name-text">{{ t.name }}</div></td>
+                        <td><span class="type-badge" :class="t.type==='buy'?'long':'short'">{{ t.type==='buy'?'매수':'매도' }}</span></td>
+                        <td>{{ fmt(t.quantity) }}주</td>
+                        <td>{{ fmt(t.price) }}원</td>
+                        <td :class="t.type==='buy'?'loss':'profit'">{{ t.type==='buy'?'-':'+' }}{{ fmt(t.total) }}원</td>
+                      </tr>
+                      <tr v-if="simTrades.length===0"><td colspan="6" class="empty-td">거래 내역이 없어요</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </template>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- 매수 모달 -->
+      <div v-if="showSimBuy" class="modal-overlay" @click.self="showSimBuy=false">
+        <div class="modal">
+          <h3>📈 매수</h3>
+          <div class="form-row">
+            <div class="form-group" style="position:relative">
+              <label>종목명 *</label>
+              <input v-model="simBuyForm.name" placeholder="삼성전자" class="input-field"
+                @input="simSearchStock(simBuyForm.name)" @blur="setTimeout(()=>simSearchResults=[],200)" />
+              <div v-if="simSearchResults.length > 0" class="search-dropdown">
+                <div v-for="r in simSearchResults" :key="r.ticker" class="search-item"
+                  @mousedown.prevent="simBuyForm.name=r.name; simBuyForm.ticker=r.ticker; simSearchResults=[]">
+                  <div class="si-name">{{ r.name }}</div>
+                  <div class="si-ticker">{{ r.ticker }}</div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>티커</label>
+              <input v-model="simBuyForm.ticker" placeholder="005930.KS" class="input-field" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>수량 (주) *</label>
+              <input v-model.number="simBuyForm.quantity" type="number" class="input-field" />
+            </div>
+            <div class="form-group">
+              <label>가격 (원) *</label>
+              <input v-model.number="simBuyForm.price" type="number" class="input-field" />
+            </div>
+          </div>
+          <div v-if="simBuyForm.quantity && simBuyForm.price" class="sim-calc">
+            주문금액: <b>{{ fmt(simBuyForm.quantity * simBuyForm.price) }}원</b>
+            &nbsp;|&nbsp; 잔고: <b>{{ fmt(simBalance) }}원</b>
+          </div>
+          <div class="modal-btns">
+            <button @click="showSimBuy=false" class="btn-cancel">취소</button>
+            <button @click="simBuy" class="btn-primary">매수</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 매도 모달 -->
+      <div v-if="simSellTarget" class="modal-overlay" @click.self="simSellTarget=null">
+        <div class="modal">
+          <h3>📉 매도 — {{ simSellTarget.name }}</h3>
+          <div class="sim-calc" style="margin-bottom:16px">
+            보유 수량: <b>{{ simSellTarget.quantity }}주</b> &nbsp;|&nbsp; 평균단가: <b>{{ fmt(simSellTarget.avg_price) }}원</b>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>수량 (주) *</label>
+              <input v-model.number="simSellForm.quantity" type="number" :max="simSellTarget.quantity" class="input-field" />
+            </div>
+            <div class="form-group">
+              <label>가격 (원) *</label>
+              <input v-model.number="simSellForm.price" type="number" class="input-field" />
+            </div>
+          </div>
+          <div v-if="simSellForm.quantity && simSellForm.price" class="sim-calc">
+            매도금액: <b>{{ fmt(simSellForm.quantity * simSellForm.price) }}원</b>
+          </div>
+          <div class="modal-btns">
+            <button @click="simSellTarget=null" class="btn-cancel">취소</button>
+            <button @click="simSell" class="btn-primary" style="background:#ef4444">매도</button>
           </div>
         </div>
       </div>
@@ -1107,6 +1323,10 @@ const scrapByStock = computed(() => {
 
 .profit { color:#ef4444; }
 .loss   { color:#2563eb; }
+
+.sim-header { display:flex; align-items:stretch; gap:16px; }
+.sim-actions { display:flex; flex-direction:column; gap:8px; justify-content:center; }
+.sim-calc { padding:10px 14px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; font-size:13px; color:#0369a1; margin-bottom:4px; }
 .side-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:49; }
 
 @media (max-width:768px) {
