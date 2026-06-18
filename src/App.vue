@@ -168,7 +168,9 @@ const isMobile   = ref(window.innerWidth <= 768)
 // ── 뉴스
 const newsMap         = ref({})   // { 종목명: [기사...] }
 const newsLoading     = ref({})
+const newsPage        = ref({})   // { 종목명: 현재페이지(0-based) }
 const selectedStock   = ref(null)
+const NEWS_PER_PAGE   = 15
 const bookmarkedIds   = ref(new Set())
 
 // ── 폼
@@ -318,8 +320,22 @@ const fetchNews = async (stockName) => {
 
 const selectStock = async (name) => {
   selectedStock.value = selectedStock.value === name ? null : name
-  if (selectedStock.value) await fetchNews(name)
+  if (selectedStock.value) {
+    newsPage.value[name] = 0
+    await fetchNews(name)
+  }
 }
+const newsPagedArticles = computed(() => {
+  const name = selectedStock.value
+  if (!name || !newsMap.value[name]) return []
+  const page = newsPage.value[name] ?? 0
+  return newsMap.value[name].slice(page * NEWS_PER_PAGE, (page + 1) * NEWS_PER_PAGE)
+})
+const newsTotalPages = computed(() => {
+  const name = selectedStock.value
+  if (!name || !newsMap.value[name]) return 1
+  return Math.ceil(newsMap.value[name].length / NEWS_PER_PAGE)
+})
 
 const timeAgo = (dateStr) => {
   if (!dateStr) return ''
@@ -892,7 +908,7 @@ const scrapByStock = computed(() => {
                     <div v-else-if="newsMap[selectedStock]?.length === 0" class="empty-chart">관련 뉴스가 없습니다</div>
 
                     <div v-else class="news-list">
-                      <div v-for="article in newsMap[selectedStock]" :key="article.url" class="news-item">
+                      <div v-for="article in newsPagedArticles" :key="article.url" class="news-item">
                         <div class="news-item-main">
                           <a :href="article.url" target="_blank" rel="noopener" class="news-title">{{ article.title }}</a>
                           <div class="news-meta">
@@ -903,6 +919,11 @@ const scrapByStock = computed(() => {
                         <button class="bookmark-btn" :class="{ saved: bookmarkedIds.has(article.url) }" @click="toggleBookmark(article, selectedStock)" :title="bookmarkedIds.has(article.url)?'스크랩 해제':'스크랩 저장'">
                           {{ bookmarkedIds.has(article.url) ? '🔖' : '🤍' }}
                         </button>
+                      </div>
+                      <div v-if="newsTotalPages > 1" class="news-pagination">
+                        <button @click="newsPage[selectedStock]--" :disabled="(newsPage[selectedStock]??0) === 0" class="pg-btn">◀</button>
+                        <span class="pg-info">{{ (newsPage[selectedStock]??0)+1 }} / {{ newsTotalPages }}</span>
+                        <button @click="newsPage[selectedStock]++" :disabled="(newsPage[selectedStock]??0) >= newsTotalPages-1" class="pg-btn">▶</button>
                       </div>
                     </div>
                   </div>
@@ -1311,6 +1332,11 @@ const scrapByStock = computed(() => {
 .bookmark-btn { flex-shrink:0; background:none; border:1px solid #e0e7ff; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:16px; transition:0.15s; color:#9ca3af; }
 .bookmark-btn:hover { background:#fef9f0; border-color:#fbbf24; }
 .bookmark-btn.saved { border-color:#7c3aed; background:#faf5ff; }
+.news-pagination { display:flex; align-items:center; justify-content:center; gap:12px; padding:14px 0 4px; }
+.pg-btn { background:#252540; border:1px solid #3a3a5c; color:#c0c0e0; border-radius:6px; padding:6px 14px; cursor:pointer; font-size:14px; transition:0.15s; }
+.pg-btn:hover:not(:disabled) { background:#3a3a5c; }
+.pg-btn:disabled { opacity:0.3; cursor:default; }
+.pg-info { color:#888; font-size:13px; min-width:50px; text-align:center; }
 
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
 .modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow:visible; }
