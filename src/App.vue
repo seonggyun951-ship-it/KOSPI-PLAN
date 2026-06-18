@@ -166,9 +166,10 @@ const sideOpen   = ref(false)
 const isMobile   = ref(window.innerWidth <= 768)
 
 // ── 뉴스
-const newsMap         = ref({})   // { 종목명: [기사...] }
+const newsMap         = ref({})   // { 종목명: { date:[...], sim:[...] } }
 const newsLoading     = ref({})
 const newsPage        = ref({})   // { 종목명: 현재페이지(0-based) }
+const newsSort        = ref('date') // 'date' | 'sim'
 const selectedStock   = ref(null)
 const NEWS_PER_PAGE   = 15
 const bookmarkedIds   = ref(new Set())
@@ -299,9 +300,9 @@ const refreshAllPrices = async () => {
   alert(`${updated}/${targets.length}개 업데이트 완료!`)
 }
 
-// ── 뉴스 (Google News RSS)
-const fetchNews = async (stockName) => {
-  if (newsMap.value[stockName]) return
+// ── 뉴스
+const fetchNews = async (stockName, sort = newsSort.value) => {
+  if (newsMap.value[stockName]?.[sort]) return
   newsLoading.value[stockName] = true
   try {
     const allStocks = [...stocks.value, ...longStocks.value, ...shortStocks.value]
@@ -311,10 +312,14 @@ const fetchNews = async (stockName) => {
     const res = await fetch(NEWS_FETCH_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}` },
-      body: JSON.stringify({ q, isKorean })
+      body: JSON.stringify({ q, isKorean, sort })
     })
-    newsMap.value[stockName] = await res.json()
-  } catch { newsMap.value[stockName] = [] }
+    if (!newsMap.value[stockName]) newsMap.value[stockName] = {}
+    newsMap.value[stockName][sort] = await res.json()
+  } catch {
+    if (!newsMap.value[stockName]) newsMap.value[stockName] = {}
+    newsMap.value[stockName][sort] = []
+  }
   newsLoading.value[stockName] = false
 }
 
@@ -325,16 +330,25 @@ const selectStock = async (name) => {
     await fetchNews(name)
   }
 }
-const newsPagedArticles = computed(() => {
+const setNewsSort = async (sort) => {
+  newsSort.value = sort
   const name = selectedStock.value
-  if (!name || !newsMap.value[name]) return []
-  const page = newsPage.value[name] ?? 0
-  return newsMap.value[name].slice(page * NEWS_PER_PAGE, (page + 1) * NEWS_PER_PAGE)
+  if (name) {
+    newsPage.value[name] = 0
+    await fetchNews(name, sort)
+  }
+}
+const currentNewsArticles = computed(() => {
+  const name = selectedStock.value
+  if (!name) return []
+  return newsMap.value[name]?.[newsSort.value] ?? []
+})
+const newsPagedArticles = computed(() => {
+  const page = newsPage.value[selectedStock.value] ?? 0
+  return currentNewsArticles.value.slice(page * NEWS_PER_PAGE, (page + 1) * NEWS_PER_PAGE)
 })
 const newsTotalPages = computed(() => {
-  const name = selectedStock.value
-  if (!name || !newsMap.value[name]) return 1
-  return Math.ceil(newsMap.value[name].length / NEWS_PER_PAGE)
+  return Math.ceil(currentNewsArticles.value.length / NEWS_PER_PAGE) || 1
 })
 
 const timeAgo = (dateStr) => {
@@ -896,16 +910,20 @@ const scrapByStock = computed(() => {
 
                   <div v-else class="card">
                     <div class="news-panel-header">
-                      <div class="card-title" style="margin:0">📰 {{ selectedStock }} 최신 뉴스</div>
-                      <button class="btn-refresh-news" @click="delete newsMap[selectedStock]; fetchNews(selectedStock)">새로고침</button>
+                      <div class="card-title" style="margin:0">📰 {{ selectedStock }} 뉴스</div>
+                      <div class="news-sort-btns">
+                        <button @click="setNewsSort('date')" :class="['sort-btn', newsSort==='date'?'active':'']">최신순</button>
+                        <button @click="setNewsSort('sim')" :class="['sort-btn', newsSort==='sim'?'active':'']">관련도순</button>
+                      </div>
+                      <button class="btn-refresh-news" @click="newsMap[selectedStock]={}; fetchNews(selectedStock)">새로고침</button>
                     </div>
 
                     <div v-if="newsLoading[selectedStock]" class="news-loading">
                       <div class="spinner sm"></div>
                       <span>뉴스 불러오는 중...</span>
                     </div>
+                    <div v-else-if="currentNewsArticles.length === 0 && newsMap[selectedStock]?.[newsSort]" class="empty-chart">관련 뉴스가 없습니다</div>
 
-                    <div v-else-if="newsMap[selectedStock]?.length === 0" class="empty-chart">관련 뉴스가 없습니다</div>
 
                     <div v-else class="news-list">
                       <div v-for="article in newsPagedArticles" :key="article.url" class="news-item">
@@ -1332,6 +1350,10 @@ const scrapByStock = computed(() => {
 .bookmark-btn { flex-shrink:0; background:none; border:1px solid #e0e7ff; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:16px; transition:0.15s; color:#9ca3af; }
 .bookmark-btn:hover { background:#fef9f0; border-color:#fbbf24; }
 .bookmark-btn.saved { border-color:#7c3aed; background:#faf5ff; }
+.news-sort-btns { display:flex; gap:4px; }
+.sort-btn { background:none; border:1px solid #3a3a5c; color:#888; border-radius:6px; padding:4px 12px; font-size:12px; cursor:pointer; transition:0.15s; }
+.sort-btn.active { background:#6c47ff; border-color:#6c47ff; color:#fff; }
+.sort-btn:hover:not(.active) { border-color:#6c47ff; color:#c0b0ff; }
 .news-pagination { display:flex; align-items:center; justify-content:center; gap:12px; padding:14px 0 4px; }
 .pg-btn { background:#252540; border:1px solid #3a3a5c; color:#c0c0e0; border-radius:6px; padding:6px 14px; cursor:pointer; font-size:14px; transition:0.15s; }
 .pg-btn:hover:not(:disabled) { background:#3a3a5c; }
