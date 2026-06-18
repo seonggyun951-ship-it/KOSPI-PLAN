@@ -531,8 +531,7 @@ const simBuy = async () => {
   const newCash = simBalance.value - total
   await supabase.from('sim_balance').update({ cash: newCash }).eq('id', 1)
   simBalance.value = newCash
-  await supabase.from('sim_trades').insert({ name: simBuyForm.value.name, ticker: simBuyForm.value.ticker, type:'buy', quantity: qty, price, total })
-  const { data: t } = await supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }).limit(1).single()
+  const { data: t } = await supabase.from('sim_trades').insert({ name: simBuyForm.value.name, ticker: simBuyForm.value.ticker, type:'buy', quantity: qty, price, total }).select().single()
   if (t) simTrades.value.unshift(t)
   simBuyForm.value = { name:'', ticker:'', quantity:'', price:'' }
   showSimBuy.value = false
@@ -556,8 +555,7 @@ const simSell = async () => {
   const newCash = simBalance.value + total
   await supabase.from('sim_balance').update({ cash: newCash }).eq('id', 1)
   simBalance.value = newCash
-  await supabase.from('sim_trades').insert({ name: h.name, ticker: h.ticker, type:'sell', quantity: qty, price, total })
-  const { data: t } = await supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }).limit(1).single()
+  const { data: t } = await supabase.from('sim_trades').insert({ name: h.name, ticker: h.ticker, type:'sell', quantity: qty, price, total }).select().single()
   if (t) simTrades.value.unshift(t)
   simSellTarget.value = null
   simSellForm.value = { quantity:'', price:'' }
