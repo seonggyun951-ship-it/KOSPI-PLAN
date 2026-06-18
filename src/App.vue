@@ -302,7 +302,7 @@ const fetchNews = async (stockName) => {
   try {
     const query   = encodeURIComponent(`${stockName} 주식`)
     const rssUrl  = `https://news.google.com/rss/search?q=${query}&hl=ko&gl=KR&ceid=KR:ko`
-    const proxy   = `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`
+    const proxy   = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`
     const res     = await fetch(proxy)
     const text    = await res.text()
     const xml     = new DOMParser().parseFromString(text, 'text/xml')
