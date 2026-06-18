@@ -236,7 +236,7 @@ const fetchAll = async () => {
     const [stockRes, newsRes, balRes, holdRes, tradeRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
       supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
-      supabase.from('sim_balance').select('*').eq('id', 1).single(),
+      supabase.from('sim_balance').select('*').eq('id', 1).maybeSingle(),
       supabase.from('sim_holdings').select('*').order('created_at'),
       supabase.from('sim_trades').select('*').order('traded_at', { ascending: false })
     ])
@@ -245,7 +245,7 @@ const fetchAll = async () => {
       savedNews.value = newsRes.data
       bookmarkedIds.value = new Set(newsRes.data.map(n => n.url))
     }
-    if (balRes.data)   simBalance.value  = balRes.data.cash
+    simBalance.value  = balRes.data?.cash ?? 10000000
     if (holdRes.data)  simHoldings.value = holdRes.data
     if (tradeRes.data) simTrades.value   = tradeRes.data
   } catch (e) { console.error(e) }
@@ -497,6 +497,18 @@ const simSearchStock = (q) => {
   if (!q || q.trim().length < 1) { simSearchResults.value = []; return }
   const query = q.trim().toLowerCase()
   simSearchResults.value = STOCK_DB.filter(s => s.name.toLowerCase().includes(query) || s.ticker.toLowerCase().includes(query)).slice(0, 6)
+}
+
+const clearSimSearch = () => { setTimeout(() => { simSearchResults.value = [] }, 200) }
+
+const simSelectStock = async (r) => {
+  simBuyForm.value.name   = r.name
+  simBuyForm.value.ticker = r.ticker
+  simSearchResults.value  = []
+  if (r.ticker) {
+    const prices = await fetchPrices([r.ticker])
+    if (prices[r.ticker]) simBuyForm.value.price = prices[r.ticker]
+  }
 }
 
 const simBuy = async () => {
@@ -991,10 +1003,10 @@ const scrapByStock = computed(() => {
             <div class="form-group" style="position:relative">
               <label>종목명 *</label>
               <input v-model="simBuyForm.name" placeholder="삼성전자" class="input-field"
-                @input="simSearchStock(simBuyForm.name)" @blur="setTimeout(()=>simSearchResults=[],200)" />
+                @input="simSearchStock(simBuyForm.name)" @blur="clearSimSearch" />
               <div v-if="simSearchResults.length > 0" class="search-dropdown">
                 <div v-for="r in simSearchResults" :key="r.ticker" class="search-item"
-                  @mousedown.prevent="simBuyForm.name=r.name; simBuyForm.ticker=r.ticker; simSearchResults=[]">
+                  @mousedown.prevent="simSelectStock(r)">
                   <div class="si-name">{{ r.name }}</div>
                   <div class="si-ticker">{{ r.ticker }}</div>
                 </div>
