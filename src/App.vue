@@ -516,6 +516,8 @@ function arc(cx,cy,r,sa,ea) {
 }
 
 const fmt     = n => Number(n||0).toLocaleString()
+const fmtInput  = v => (v !== '' && v != null) ? Number(String(v).replace(/[^0-9]/g,'')||0).toLocaleString('ko-KR') : ''
+const parseInput = v => Number(String(v).replace(/[^0-9]/g,'')) || 0
 const fmtRate = r => (r >= 0 ? '+' : '') + Number(r).toFixed(2) + '%'
 const isProfit= r => r >= 0
 
@@ -1138,8 +1140,8 @@ const scrapByStock = computed(() => {
             </div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label>수량 (주)</label><input v-model.number="newStock.quantity" type="number" class="input-field" /></div>
-            <div class="form-group"><label>평균단가 (원)</label><input v-model.number="newStock.avg_price" type="number" placeholder="75400" class="input-field" /></div>
+            <div class="form-group"><label>수량 (주)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.quantity)" @input="newStock.quantity = parseInput($event.target.value)" class="input-field" placeholder="10" /></div>
+            <div class="form-group"><label>평균단가 (원)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.avg_price)" @input="newStock.avg_price = parseInput($event.target.value)" class="input-field" placeholder="75,400" /></div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -1188,8 +1190,8 @@ const scrapByStock = computed(() => {
             </div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label>수량 (주)</label><input v-model.number="editStock.quantity" type="number" class="input-field" /></div>
-            <div class="form-group"><label>평균단가 (원)</label><input v-model.number="editStock.avg_price" type="number" class="input-field" /></div>
+            <div class="form-group"><label>수량 (주)</label><input type="text" inputmode="numeric" :value="fmtInput(editStock.quantity)" @input="editStock.quantity = parseInput($event.target.value)" class="input-field" /></div>
+            <div class="form-group"><label>평균단가 (원)</label><input type="text" inputmode="numeric" :value="fmtInput(editStock.avg_price)" @input="editStock.avg_price = parseInput($event.target.value)" class="input-field" /></div>
           </div>
           <div class="form-row">
             <div class="form-group">
