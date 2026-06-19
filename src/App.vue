@@ -522,7 +522,16 @@ const fmtRate = r => (r >= 0 ? '+' : '') + Number(r).toFixed(2) + '%'
 const isProfit= r => r >= 0
 
 // ── 모의투자 계산
-const simHoldingValue = computed(() => simHoldings.value.reduce((s, h) => s + h.quantity * h.avg_price, 0))
+const simCurrentPrice = (h) => {
+  const s = stocks.value.find(s => s.name === h.name || s.ticker === h.ticker)
+  return s?.current_price || h.avg_price
+}
+const simHoldingPnl  = (h) => (simCurrentPrice(h) - h.avg_price) * h.quantity
+const simHoldingRate = (h) => h.avg_price ? (simCurrentPrice(h) - h.avg_price) / h.avg_price * 100 : 0
+const simHoldingValue = computed(() => simHoldings.value.reduce((s, h) => s + h.quantity * simCurrentPrice(h), 0))
+const simCostBasis    = computed(() => simHoldings.value.reduce((s, h) => s + h.quantity * h.avg_price, 0))
+const simTotalPnl     = computed(() => simHoldingValue.value - simCostBasis.value)
+const simTotalRate    = computed(() => simCostBasis.value ? simTotalPnl.value / simCostBasis.value * 100 : 0)
 const simTotalAsset   = computed(() => simBalance.value + simHoldingValue.value)
 
 const simSearchStock = (q) => {
@@ -994,6 +1003,9 @@ const scrapByStock = computed(() => {
                   <div class="sc-sub">
                     <span>현금 {{ fmt(simBalance) }}원</span>
                     <span>보유주식 {{ fmt(Math.round(simHoldingValue)) }}원</span>
+                    <span :class="simTotalPnl>=0?'profit':'loss'" style="font-weight:600">
+                      {{ simTotalPnl>=0?'+':'' }}{{ fmt(Math.round(simTotalPnl)) }}원 ({{ simTotalRate>=0?'+':'' }}{{ simTotalRate.toFixed(2) }}%)
+                    </span>
                   </div>
                 </div>
                 <div class="sim-actions">
@@ -1006,16 +1018,18 @@ const scrapByStock = computed(() => {
                 <div class="card-title">보유 종목</div>
                 <div class="table-wrap">
                   <table class="stock-table">
-                    <thead><tr><th>종목명</th><th>수량</th><th>평균단가</th><th>평가금액</th><th></th></tr></thead>
+                    <thead><tr><th>종목명</th><th>수량</th><th>평단</th><th>현재가</th><th>손익</th><th>수익률</th><th></th></tr></thead>
                     <tbody>
                       <tr v-for="h in simHoldings" :key="h.id">
                         <td><div class="td-name"><div><div class="name-text">{{ h.name }}</div><div v-if="h.ticker" class="ticker-text">{{ h.ticker }}</div></div></div></td>
                         <td>{{ fmt(h.quantity) }}주</td>
                         <td>{{ fmt(h.avg_price) }}원</td>
-                        <td>{{ fmt(h.quantity * h.avg_price) }}원</td>
+                        <td>{{ fmt(simCurrentPrice(h)) }}원</td>
+                        <td :class="simHoldingPnl(h)>=0?'profit':'loss'">{{ simHoldingPnl(h)>=0?'+':'' }}{{ fmt(Math.round(simHoldingPnl(h))) }}원</td>
+                        <td :class="simHoldingRate(h)>=0?'profit':'loss'">{{ simHoldingRate(h)>=0?'+':'' }}{{ simHoldingRate(h).toFixed(2) }}%</td>
                         <td><button class="btn-sm del" @click="openSimSell(h)">매도</button></td>
                       </tr>
-                      <tr v-if="simHoldings.length===0"><td colspan="5" class="empty-td">보유 종목이 없어요</td></tr>
+                      <tr v-if="simHoldings.length===0"><td colspan="7" class="empty-td">보유 종목이 없어요</td></tr>
                     </tbody>
                   </table>
                 </div>
