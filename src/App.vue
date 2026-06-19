@@ -569,6 +569,12 @@ const simBuy = async () => {
   showSimBuy.value = false
 }
 
+const openSimSell = (h) => {
+  simSellTarget.value = h
+  const stock = stocks.value.find(s => s.name === h.name || s.ticker === h.ticker)
+  simSellForm.value = { quantity: '', price: stock?.current_price || h.avg_price || '' }
+}
+
 const simSell = async () => {
   const h     = simSellTarget.value
   const qty   = Number(simSellForm.value.quantity)
@@ -1007,7 +1013,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(h.quantity) }}주</td>
                         <td>{{ fmt(h.avg_price) }}원</td>
                         <td>{{ fmt(h.quantity * h.avg_price) }}원</td>
-                        <td><button class="btn-sm del" @click="simSellTarget=h; simSellForm={quantity:'',price:''}">매도</button></td>
+                        <td><button class="btn-sm del" @click="openSimSell(h)">매도</button></td>
                       </tr>
                       <tr v-if="simHoldings.length===0"><td colspan="5" class="empty-td">보유 종목이 없어요</td></tr>
                     </tbody>
@@ -1405,7 +1411,7 @@ const scrapByStock = computed(() => {
   .chart-grid { grid-template-columns:1fr; }
   .form-row { flex-direction:column; }
   .top-actions { gap:6px; }
-  .btn-refresh { display:none; }
+  .btn-refresh { font-size:12px; padding:6px 12px; }
   .news-layout { grid-template-columns:1fr; }
   .news-back-btn { display:block; background:none; border:none; color:#7c6aff; font-size:13px; font-weight:600; padding:0 0 12px; cursor:pointer; }
   .news-panel-header { flex-wrap:wrap; gap:8px; }
