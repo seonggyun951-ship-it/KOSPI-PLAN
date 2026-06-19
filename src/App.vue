@@ -1022,10 +1022,10 @@ const scrapByStock = computed(() => {
                     <tbody>
                       <tr v-for="h in simHoldings" :key="h.id">
                         <td><div class="td-name"><div><div class="name-text">{{ h.name }}</div><div v-if="h.ticker" class="ticker-text">{{ h.ticker }}</div></div></div></td>
-                        <td>{{ fmt(h.quantity) }}주</td>
-                        <td>{{ fmt(h.avg_price) }}원</td>
-                        <td>{{ fmt(simCurrentPrice(h)) }}원</td>
-                        <td :class="simHoldingPnl(h)>=0?'profit':'loss'">{{ simHoldingPnl(h)>=0?'+':'' }}{{ fmt(Math.round(simHoldingPnl(h))) }}원</td>
+                        <td>{{ fmt(h.quantity) }}</td>
+                        <td>{{ fmt(h.avg_price) }}</td>
+                        <td>{{ fmt(simCurrentPrice(h)) }}</td>
+                        <td :class="simHoldingPnl(h)>=0?'profit':'loss'">{{ simHoldingPnl(h)>=0?'+':'' }}{{ fmt(Math.round(simHoldingPnl(h))) }}</td>
                         <td :class="simHoldingRate(h)>=0?'profit':'loss'">{{ simHoldingRate(h)>=0?'+':'' }}{{ simHoldingRate(h).toFixed(2) }}%</td>
                         <td><button class="btn-sm del" @click="openSimSell(h)">매도</button></td>
                       </tr>
