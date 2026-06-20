@@ -149,7 +149,9 @@ const STOCK_DB = [
 
 // ── 인증
 const isAuthorized = ref(false)
+const inputEmail    = ref('')
 const inputPassword = ref('')
+const loginError    = ref('')
 
 // ── 데이터
 const stocks     = ref([])
@@ -217,21 +219,21 @@ const setToast = (s) => {
 
 // ── 로그인
 const login = async () => {
-  try {
-    const res = await fetch(EDGE_FUNCTION_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}`
-      },
-      body: JSON.stringify({ password: inputPassword.value, app: 'stock' })
-    })
-    const { ok } = await res.json()
-    if (ok) {
-      isAuthorized.value = true
-      await fetchAll()
-    } else { alert('비밀번호가 틀렸습니다!'); inputPassword.value = '' }
-  } catch { alert('인증 서버 오류, 다시 시도해주세요.') }
+  loginError.value = ''
+  const { error } = await supabase.auth.signInWithPassword({
+    email: inputEmail.value.trim(),
+    password: inputPassword.value
+  })
+  if (error) { loginError.value = '이메일 또는 비밀번호가 틀렸습니다.'; return }
+  isAuthorized.value = true
+  await fetchAll()
+}
+
+const logout = async () => {
+  await supabase.auth.signOut()
+  isAuthorized.value = false
+  inputEmail.value = ''
+  inputPassword.value = ''
 }
 
 // ── 데이터 불러오기
@@ -447,7 +449,8 @@ const onResize = () => { isMobile.value = window.innerWidth <= 768 }
 let channel
 onMounted(async () => {
   window.addEventListener('resize', onResize)
-  if (isAuthorized.value) await fetchAll()
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session) { isAuthorized.value = true; await fetchAll() }
   channel = supabase.channel('stock-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'stock_items' }, (p) => {
       if (p.eventType==='INSERT') { if (!stocks.value.find(s=>s.id===p.new.id)) stocks.value.push(p.new) }
@@ -637,8 +640,10 @@ const scrapByStock = computed(() => {
       <div class="login-box">
         <div class="login-icon">📈</div>
         <h2>나만의 주식 포트폴리오</h2>
-        <input v-model="inputPassword" type="password" placeholder="비밀번호 입력" @keyup.enter="login" class="pw-input" />
-        <button @click="login" class="btn-primary">입장하기</button>
+        <input v-model="inputEmail" type="email" placeholder="이메일" @keyup.enter="login" class="pw-input" style="margin-bottom:10px" />
+        <input v-model="inputPassword" type="password" placeholder="비밀번호" @keyup.enter="login" class="pw-input" />
+        <div v-if="loginError" style="color:#ef4444;font-size:13px;margin-top:8px">{{ loginError }}</div>
+        <button @click="login" class="btn-primary" style="margin-top:16px">입장하기</button>
       </div>
     </div>
 
@@ -677,6 +682,7 @@ const scrapByStock = computed(() => {
             <div class="ss-label">총 평가금액</div>
             <div class="ss-value">{{ fmt(Math.round(total.value)) }}원</div>
             <div class="ss-rate" :class="isProfit(total.rate) ? 'profit' : 'loss'">{{ fmtRate(total.rate) }}</div>
+            <button @click="logout" class="btn-logout">로그아웃</button>
           </div>
         </aside>
 
@@ -1263,6 +1269,8 @@ const scrapByStock = computed(() => {
 .nav-icon { font-size:18px; }
 .nav-badge { margin-left:auto; background:rgba(255,255,255,0.25); border-radius:10px; padding:1px 8px; font-size:11px; font-weight:700; }
 .sidebar-summary { padding:16px 20px; border-top:1px solid rgba(255,255,255,0.1); }
+.btn-logout { margin-top:12px; width:100%; padding:7px; border:1px solid rgba(255,255,255,0.3); border-radius:8px; background:none; color:rgba(255,255,255,0.7); font-size:12px; cursor:pointer; }
+.btn-logout:hover { background:rgba(255,255,255,0.1); }
 .ss-label { font-size:11px; opacity:0.6; margin-bottom:4px; }
 .ss-value { font-size:18px; font-weight:700; margin-bottom:4px; }
 .ss-rate { font-size:14px; font-weight:700; }
