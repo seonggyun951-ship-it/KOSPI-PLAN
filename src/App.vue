@@ -833,9 +833,92 @@ const deleteWeight = async (id) => {
 
 // ── 헬스 분석
 const selectedExercise = ref('')
-const reportTab        = ref('weekly') // 'weekly' | 'monthly'
+const reportTab        = ref('weekly')
 const reportComment    = ref('')
 const commentLoading   = ref(false)
+
+// 프로필 (localStorage)
+const profile = ref(JSON.parse(localStorage.getItem('health_profile') || '{"height":"","age":"","gender":"남","goal":""}'))
+const saveProfile = () => { localStorage.setItem('health_profile', JSON.stringify(profile.value)) }
+
+// 데이터 복사
+const copyWorkoutData = () => {
+  const p = profile.value
+  const latestWeight = weightLogs.value.at(-1)?.weight
+  const headerLines = ['=== 헬스 데이터 ===\n']
+  if (p.height || p.age || p.gender) {
+    headerLines.push('[프로필]')
+    if (p.gender) headerLines.push(`성별: ${p.gender}`)
+    if (p.age)    headerLines.push(`나이: ${p.age}세`)
+    if (p.height) headerLines.push(`키: ${p.height}cm`)
+    if (latestWeight) headerLines.push(`현재 체중: ${latestWeight}kg`)
+    if (p.height && latestWeight) {
+      const bmi = (latestWeight / ((p.height/100)**2)).toFixed(1)
+      headerLines.push(`BMI: ${bmi}`)
+    }
+    if (p.goal)   headerLines.push(`목표: ${p.goal}`)
+    headerLines.push('')
+  }
+
+  const byDate = {}
+  workouts.value.forEach(w => {
+    if (!byDate[w.date]) byDate[w.date] = []
+    byDate[w.date].push(w)
+  })
+  const lines = [...headerLines, '=== 운동 기록 ===\n']
+  Object.keys(byDate).sort().reverse().forEach(date => {
+    lines.push(`[${date}]`)
+    byDate[date].forEach(w => {
+      lines.push(`• ${w.exercise} (${w.muscle_group})`)
+      if (w.set_logs?.length) {
+        w.set_logs.forEach((s, i) => {
+          const tag = s.type === 'failure' ? ' (실패)' : s.type === 'dropset' ? ' (드롭)' : ''
+          lines.push(`  Set ${i+1}: ${s.weight}kg × ${s.reps}회${tag}`)
+        })
+      } else {
+        lines.push(`  ${w.sets}세트 × ${w.reps}회 / ${w.weight}kg`)
+      }
+    })
+    lines.push('')
+  })
+  if (weightLogs.value.length) {
+    lines.push('[체중 기록]')
+    weightLogs.value.slice(-20).forEach(w => lines.push(`${w.date}: ${w.weight}kg`))
+    lines.push('')
+  }
+  lines.push('[집계]')
+  lines.push(`총 운동 일수: ${new Set(workouts.value.map(w=>w.date)).size}일`)
+  lines.push(`총 볼륨: ${workouts.value.reduce((s,w)=>s+calcVolume(w),0).toLocaleString('ko-KR')}kg`)
+  MUSCLE_GROUPS.forEach(g => {
+    const cnt = workouts.value.filter(w=>w.muscle_group===g).length
+    if (cnt) lines.push(`${g}: ${cnt}회`)
+  })
+  navigator.clipboard.writeText(lines.join('\n'))
+  alert('클립보드에 복사됐어요! Claude.ai에 붙여넣기 하세요.')
+}
+
+// 부위별 주간 볼륨 차트 (최근 6주)
+const weeklyMuscleChart = computed(() => {
+  const weeks = []
+  for (let i = 5; i >= 0; i--) {
+    const start = new Date(Date.now() - (i+1)*7*86400000)
+    const end   = new Date(Date.now() - i*7*86400000)
+    const label = `${start.getMonth()+1}/${start.getDate()}`
+    const weekData = {}
+    MUSCLE_GROUPS.forEach(g => weekData[g] = 0)
+    workouts.value
+      .filter(w => { const d = new Date(w.date); return d >= start && d < end })
+      .forEach(w => { if (weekData[w.muscle_group] !== undefined) weekData[w.muscle_group] += calcVolume(w) || 1 })
+    weeks.push({ label, data: weekData })
+  }
+  const maxVal = Math.max(...weeks.flatMap(w => Object.values(w.data)), 1)
+  return { weeks, maxVal }
+})
+
+const MUSCLE_COLORS = {
+  '가슴':'#6c47ff','등':'#22c55e','어깨':'#f59e0b','하체':'#ef4444',
+  '삼두':'#3b82f6','이두':'#8b5cf6','코어':'#ec4899','유산소':'#14b8a6'
+}
 
 const calcVolume = (w) => {
   if (w.set_logs?.length) return w.set_logs.reduce((s, l) => s + (l.weight||0) * (l.reps||0), 0)
@@ -1467,8 +1550,42 @@ const scrapByStock = computed(() => {
             <!-- 헬스 탭 -->
             <template v-if="tab==='health'">
 
-              <!-- 보고서 -->
+              <!-- 프로필 카드 -->
               <div class="card">
+                <div class="report-header">
+                  <div class="card-title" style="margin:0">내 프로필</div>
+                  <button @click="copyWorkoutData" class="btn-copy-data">📋 데이터 복사</button>
+                </div>
+                <div class="profile-grid">
+                  <div class="form-group">
+                    <label>성별</label>
+                    <select v-model="profile.gender" class="input-field" @change="saveProfile">
+                      <option>남</option><option>여</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>나이</label>
+                    <input v-model="profile.age" type="number" class="input-field" placeholder="25" @change="saveProfile" />
+                  </div>
+                  <div class="form-group">
+                    <label>키 (cm)</label>
+                    <input v-model="profile.height" type="number" class="input-field" placeholder="175" @change="saveProfile" />
+                  </div>
+                  <div class="form-group">
+                    <label>현재 체중</label>
+                    <div class="input-field" style="background:#f0f0fa;color:#888">
+                      {{ weightLogs.length ? weightLogs[weightLogs.length-1].weight + 'kg' : '-' }}
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group" style="margin-top:8px">
+                  <label>목표</label>
+                  <input v-model="profile.goal" class="input-field" placeholder="예: 체지방 감량, 근육 증가, 벤치프레스 100kg" @change="saveProfile" />
+                </div>
+              </div>
+
+              <!-- 보고서 -->
+              <div class="card mt16">
                 <div class="report-header">
                   <div class="card-title" style="margin:0">보고서</div>
                   <div class="report-tabs">
@@ -1598,6 +1715,27 @@ const scrapByStock = computed(() => {
               <!-- 부위 불균형 경고 -->
               <div v-if="muscleImbalance.length" class="alert-card mt16">
                 ⚠️ 상대적으로 부족한 부위: <strong>{{ muscleImbalance.join(', ') }}</strong>
+              </div>
+
+              <!-- 부위별 주간 볼륨 차트 -->
+              <div class="card mt16">
+                <div class="card-title">부위별 주간 볼륨 (최근 6주)</div>
+                <div class="muscle-legend">
+                  <span v-for="g in MUSCLE_GROUPS" :key="g" class="legend-item">
+                    <span class="legend-dot" :style="{background: MUSCLE_COLORS[g]}"></span>{{ g }}
+                  </span>
+                </div>
+                <div class="muscle-week-chart">
+                  <div v-for="week in weeklyMuscleChart.weeks" :key="week.label" class="mwc-col">
+                    <div class="mwc-bars">
+                      <div v-for="g in MUSCLE_GROUPS" :key="g" class="mwc-bar"
+                        :style="{ height: (week.data[g] / weeklyMuscleChart.maxVal * 80) + 'px', background: MUSCLE_COLORS[g], opacity: week.data[g] ? 1 : 0 }"
+                        :title="`${g}: ${week.data[g].toLocaleString()}kg`">
+                      </div>
+                    </div>
+                    <div class="mwc-label">{{ week.label }}</div>
+                  </div>
+                </div>
               </div>
 
               <!-- 부위 밸런스 -->
@@ -2220,6 +2358,16 @@ const scrapByStock = computed(() => {
 .report-missing { font-size:12px; color:#f59e0b; margin-bottom:8px; }
 .report-comment-area { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
 .report-comment { background:#f0f0fa; border-radius:10px; padding:12px 14px; font-size:13px; color:#333; line-height:1.6; border-left:3px solid #6c47ff; }
+.btn-copy-data { background:#22c55e; color:#fff; border:none; border-radius:20px; padding:6px 14px; font-size:13px; cursor:pointer; }
+.profile-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+.muscle-legend { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+.legend-item { display:flex; align-items:center; gap:4px; font-size:11px; color:#555; }
+.legend-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+.muscle-week-chart { display:flex; gap:4px; align-items:flex-end; }
+.mwc-col { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; }
+.mwc-bars { display:flex; gap:1px; align-items:flex-end; height:80px; }
+.mwc-bar { width:6px; border-radius:2px 2px 0 0; transition:height 0.4s; min-height:0; }
+.mwc-label { font-size:10px; color:#888; }
 .btn-gen-report { width:100%; background:#6c47ff; color:#fff; border:none; border-radius:10px; padding:10px; font-size:14px; cursor:pointer; margin-top:12px; }
 .btn-gen-report:disabled { opacity:0.6; cursor:default; }
 .past-reports { margin-top:14px; display:flex; flex-direction:column; gap:6px; }
