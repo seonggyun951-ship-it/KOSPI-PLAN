@@ -191,7 +191,96 @@ const showAddWorkout = ref(false)
 const showAddWeight  = ref(false)
 const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' })
 const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
-const MUSCLE_GROUPS = ['가슴','등','어깨','팔','하체','복근','전신']
+const MUSCLE_GROUPS = ['가슴','등','어깨','하체','삼두','이두','코어','유산소']
+const EXERCISE_DB = {
+  '가슴': [
+    '벤치프레스','스미스머신 벤치프레스','스미스머신 인클라인 벤치프레스',
+    '덤벨 벤치프레스','인클라인 덤벨 벤치프레스','인클라인 벤치프레스','디클라인 벤치프레스',
+    '덤벨 플라이','인클라인 덤벨 플라이','디클라인 덤벨 플라이',
+    '스탠딩 케이블 플라이','인클라인 케이블 플라이','로우 풀리 케이블 플라이',
+    '딥스','중량 딥스','어시스트 딥스 머신','시티드 딥스 머신',
+    '푸시업','중량 푸시업','클로즈그립 푸시업','인클라인 푸시업','디클라인 푸시업',
+    '체스트 프레스 머신','펙덱 플라이 머신','인클라인 벤치프레스 머신','디클라인 체스트 프레스 머신',
+    '덤벨 풀오버','해머 벤치프레스','스포토 벤치프레스','바벨 플로어 프레스',
+    '덤벨 스퀴즈 프레스','인클라인 덤벨 트위스트 프레스'
+  ],
+  '등': [
+    '풀업','중량 풀업','어시스트 풀업 머신',
+    '친업','중량 친업',
+    '랫풀다운','맥그립 랫풀다운','패러럴그립 랫풀다운','언더그립 랫풀다운','비하인드 넥 풀다운',
+    '원암 케이블 풀다운','원암 레터럴 와이드 풀다운',
+    '바벨 로우','언더그립 바벨 로우','인클라인 바벨 로우','라잉 바벨 로우','정지 바벨 로우',
+    '덤벨 로우','원암 덤벨 로우','인클라인 덤벨 로우',
+    '시티드 케이블 로우','플로어 시티드 케이블 로우','원암 시티드 케이블 로우',
+    '시티드 로우 머신','티바 로우 머신','로우 로우 머신','원암 로우 로우 머신',
+    '하이 로우 머신','언더그립 하이 로우 머신','원암 하이 로우 머신',
+    '인버티드 로우','스미스머신 로우','케이블 암 풀다운',
+    '백 익스텐션','중량 하이퍼 익스텐션','굿모닝 엑서사이즈','바벨 풀오버'
+  ],
+  '어깨': [
+    '오버헤드 프레스','스미스머신 오버헤드 프레스','푸시 프레스','비하인드 넥 프레스',
+    '덤벨 숄더 프레스','아놀드 덤벨 프레스','시티드 덤벨 숄더 프레스','시티드 바벨 숄더 프레스',
+    '플레이트 숄더 프레스','랜드마인 프레스','원암 랜드마인 프레스',
+    '숄더 프레스 머신',
+    '덤벨 레터럴 레이즈','케이블 레터럴 레이즈','원암 케이블 레터럴 레이즈','레터럴 레이즈 머신',
+    '벤트오버 덤벨 레터럴 레이즈','시티드 덤벨 리어 레터럴 레이즈',
+    '덤벨 프론트 레이즈','케이블 프론트 레이즈','이지바 프론트 레이즈',
+    '덤벨 슈러그','바벨 슈러그','스미스머신 슈러그','케이블 슈러그','슈러그 머신',
+    '페이스 풀','바벨 업라이트 로우','덤벨 업라이트 로우','이지바 업라이트 로우',
+    '케이블 리버스 플라이','리어 델토이드 플라이 머신',
+    '케이블 인터널 로테이션','케이블 익스터널 로테이션',
+    'Y 레이즈','덤벨 Y 레이즈','핸드스탠드 푸시업'
+  ],
+  '하체': [
+    '바벨 백스쿼트','프론트 스쿼트','박스 스쿼트','저처 스쿼트','에어 스쿼트','점프 스쿼트',
+    '스미스머신 스쿼트','핵 스쿼트 머신',
+    '덤벨 스쿼트','덤벨 고블릿 스쿼트','케틀벨 고블릿 스쿼트',
+    '스플릿 스쿼트','불가리안 스플릿 스쿼트','스미스머신 스플릿 스쿼트','피스톨 스쿼트',
+    '컨벤셔널 데드리프트','스미스머신 데드리프트',
+    '루마니안 데드리프트','스모 데드리프트',
+    '레그 프레스','레그 컬','레그 익스텐션',
+    '힙 쓰러스트','힙 쓰러스트 머신','글루트 브릿지','덩키 킥',
+    '런지','덤벨 런지','스텝업','카프 레이즈',
+    '노르딕 햄스트링 컬'
+  ],
+  '삼두': [
+    '케이블 푸시 다운','케이블 트라이셉 익스텐션','케이블 오버헤드 트라이셉 익스텐션','케이블 라잉 트라이셉 익스텐션',
+    '덤벨 트라이셉 익스텐션','시티드 덤벨 트라이셉 익스텐션','덤벨 킥백',
+    '스컬 크러셔','바벨 라잉 트라이셉 익스텐션',
+    '클로즈 그립 벤치프레스','벤치 딥스','트라이셉 익스텐션 머신',
+    '딥스','중량 딥스'
+  ],
+  '이두': [
+    '바벨 컬','이지바 컬','덤벨 컬','인클라인 덤벨 컬',
+    '덤벨 해머 컬','케이블 해머컬',
+    '덤벨 프리쳐 컬','바벨 프리쳐 컬','이지바 프리쳐 컬','프리쳐 컬 머신',
+    '암 컬 머신',
+    '리버스 바벨 컬','리버스 덤벨 컬',
+    '바벨 리스트 컬','이지바 리스트 컬','덤벨 리스트 컬',
+    '리버스 바벨 리스트 컬','리버스 덤벨 리스트 컬'
+  ],
+  '코어': [
+    '플랭크','사이드 플랭크','RKC 플랭크','플랭크 트위스트',
+    '크런치','리버스 크런치','사이드 크런치','디클라인 크런치','중량 디클라인 크런치',
+    '싯업','디클라인 싯업','중량 디클라인 싯업',
+    '레그 레이즈','행잉 레그 레이즈','행잉 니 레이즈','캡틴스 체어 니 레이즈','시티드 니업',
+    '러시안 트위스트','케이블 트위스트','토르소 로테이션 머신',
+    '브이 업','할로우 락','할로우 포지션',
+    '복근 롤아웃','복근 에어 바이크',
+    '덤벨 사이드 벤드','45도 사이드 벤드','케이블 사이드 벤드',
+    '토즈투 바','힐 터치',
+    '케이블 크런치','복근 크런치 머신','복근 코스터 머신',
+    '데드버그','버드독','필라테스 잭나이프','업도미널 힙 쓰러스트'
+  ],
+  '유산소': [
+    '트레드밀','달리기','걷기',
+    '싸이클','어썰트 바이크','일립티컬 머신',
+    '로잉 머신','스키 머신',
+    '줄넘기','이단 뛰기','하이니 스킵',
+    '계단 오르기','스텝밀',
+    '수영'
+  ]
+}
 const showSimBuy  = ref(false)
 const simSellTarget = ref(null)
 const simBuyForm  = ref({ name:'', ticker:'', quantity:'', price:'' })
@@ -636,8 +725,13 @@ const simReset = async () => {
 
 // ── 헬스 CRUD
 const addWorkout = async () => {
-  if (!newWorkout.value.exercise.trim()) return
-  const { data, error } = await supabase.from('workouts').insert({ ...newWorkout.value }).select().single()
+  const exerciseName = newWorkout.value.exercise === '__custom__'
+    ? (newWorkout.value.customExercise || '').trim()
+    : newWorkout.value.exercise.trim()
+  if (!exerciseName) return
+  const { customExercise, ...payload } = newWorkout.value
+  payload.exercise = exerciseName
+  const { data, error } = await supabase.from('workouts').insert(payload).select().single()
   if (!error && data) {
     workouts.value.unshift(data)
     newWorkout.value = { date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' }
@@ -1132,19 +1226,19 @@ const scrapByStock = computed(() => {
             <template v-if="tab==='health'">
               <!-- 요약 카드 -->
               <div class="summary-grid">
-                <div class="summary-card">
+                <div class="summary-card total">
                   <div class="sc-label">총 운동 기록</div>
                   <div class="sc-value sm">{{ workouts.length }}회</div>
                 </div>
-                <div class="summary-card">
+                <div class="summary-card long-card">
                   <div class="sc-label">최근 체중</div>
                   <div class="sc-value sm">{{ weightLogs.length ? weightLogs[weightLogs.length-1].weight + 'kg' : '-' }}</div>
                 </div>
-                <div class="summary-card" :class="weightPlateau ? 'loss' : ''">
+                <div class="summary-card" :class="weightPlateau ? 'short-card' : 'long-card'">
                   <div class="sc-label">체중 정체기</div>
                   <div class="sc-value sm" style="font-size:16px">{{ weightPlateau ? '⚠️ 정체기' : '✅ 변화중' }}</div>
                 </div>
-                <div class="summary-card">
+                <div class="summary-card short-card">
                   <div class="sc-label">이번 주 운동</div>
                   <div class="sc-value sm">{{ workouts.filter(w => new Date(w.date) >= new Date(Date.now()-7*86400000)).length }}회</div>
                 </div>
@@ -1236,12 +1330,20 @@ const scrapByStock = computed(() => {
             <div class="form-group"><label>날짜</label><input v-model="newWorkout.date" type="date" class="input-field" /></div>
             <div class="form-group">
               <label>부위</label>
-              <select v-model="newWorkout.muscle_group" class="input-field">
+              <select v-model="newWorkout.muscle_group" class="input-field" @change="newWorkout.exercise=''; newWorkout.customExercise=''">
                 <option v-for="g in MUSCLE_GROUPS" :key="g">{{ g }}</option>
               </select>
             </div>
           </div>
-          <div class="form-group"><label>운동 이름</label><input v-model="newWorkout.exercise" class="input-field" placeholder="벤치프레스" /></div>
+          <div class="form-group">
+            <label>운동 종목</label>
+            <select v-model="newWorkout.exercise" class="input-field">
+              <option value="" disabled>종목 선택</option>
+              <option v-for="ex in EXERCISE_DB[newWorkout.muscle_group] || []" :key="ex" :value="ex">{{ ex }}</option>
+              <option value="__custom__">직접 입력...</option>
+            </select>
+            <input v-if="newWorkout.exercise === '__custom__'" v-model="newWorkout.customExercise" class="input-field" style="margin-top:6px" placeholder="운동 이름 직접 입력" />
+          </div>
           <div class="form-row">
             <div class="form-group"><label>세트</label><input v-model.number="newWorkout.sets" type="number" class="input-field" /></div>
             <div class="form-group"><label>횟수</label><input v-model.number="newWorkout.reps" type="number" class="input-field" /></div>
