@@ -1747,7 +1747,7 @@ const scrapByStock = computed(() => {
 
               <!-- 부위별 주간 볼륨 + 총 횟수 -->
               <div class="card mt16">
-                <div class="card-title">부위별 운동 현황</div>
+                <div class="card-title">부위별 운동량</div>
                 <div class="muscle-legend">
                   <span v-for="g in MUSCLE_GROUPS" :key="g" class="legend-item">
                     <span class="legend-dot" :style="{background: MUSCLE_COLORS[g]}"></span>{{ g }}
