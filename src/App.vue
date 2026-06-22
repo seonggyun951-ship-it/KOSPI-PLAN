@@ -185,10 +185,13 @@ const simHoldings = ref([])
 const simTrades   = ref([])
 
 // ── 헬스
-const workouts      = ref([])
-const weightLogs    = ref([])
-const showAddWorkout = ref(false)
-const showAddWeight  = ref(false)
+const workouts        = ref([])
+const weightLogs      = ref([])
+const reports         = ref([])
+const showAddWorkout  = ref(false)
+const showAddWeight   = ref(false)
+const selectedReport  = ref(null)
+const reportGenerating = ref(false)
 const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' })
 const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
 
@@ -345,14 +348,15 @@ const logout = async () => {
 const fetchAll = async () => {
   loading.value = true
   try {
-    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes] = await Promise.all([
+    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes, reportRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
       supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
       supabase.from('sim_balance').select('*').eq('id', 1).maybeSingle(),
       supabase.from('sim_holdings').select('*').order('created_at'),
       supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }),
       supabase.from('workouts').select('*').order('date', { ascending: false }),
-      supabase.from('weight_logs').select('*').order('date')
+      supabase.from('weight_logs').select('*').order('date'),
+      supabase.from('reports').select('*').order('period_start', { ascending: false })
     ])
     if (stockRes.data) stocks.value = stockRes.data
     if (newsRes.data)  {
@@ -364,6 +368,7 @@ const fetchAll = async () => {
     if (tradeRes.data) simTrades.value   = tradeRes.data
     if (workoutRes.data) workouts.value  = workoutRes.data
     if (weightRes.data)  weightLogs.value = weightRes.data
+    if (reportRes.data)  reports.value   = reportRes.data
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
@@ -873,52 +878,62 @@ const monthlyReport = computed(() => {
   return { month: mo+1, thisDays, daysInMonth, thisVolume, lastVolume, topEx: topEx?.[0], topExCnt: topEx?.[1]||0, mostImproved, startW: mWeights[0]?.weight??null, endW: mWeights[mWeights.length-1]?.weight??null }
 })
 
-// 코멘트 생성 — 현재는 규칙 기반, 나중에 API로 교체
-const generateComment = async () => {
-  commentLoading.value = true
-  reportComment.value = ''
-  await new Promise(r => setTimeout(r, 400))
+// ── 보고서 생성 (Claude API 연결 전 placeholder)
+const buildReportPayload = (type) => {
+  const now = new Date()
+  const dow = now.getDay()
+  const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - (dow===0?6:dow-1)); thisMonday.setHours(0,0,0,0)
+  const mo = now.getMonth(), yr = now.getFullYear()
 
-  const r = reportTab.value === 'weekly' ? weeklyReport.value : monthlyReport.value
-  const lines = []
+  let periodStart, periodEnd, periodLabel, targetWorkouts, targetWeights
 
-  if (reportTab.value === 'weekly') {
-    const wr = weeklyReport.value
-    if (wr.thisDays === 0) lines.push('이번 주 운동 기록이 없어요. 작은 것부터 시작해봐요 💪')
-    else if (wr.thisDays >= 5) lines.push(`이번 주 ${wr.thisDays}일 운동! 정말 대단해요 🔥`)
-    else if (wr.thisDays > wr.lastDays) lines.push(`지난 주보다 ${wr.thisDays - wr.lastDays}일 더 운동했어요. 좋은 흐름이에요!`)
-    else if (wr.thisDays < wr.lastDays) lines.push(`지난 주보다 운동 일수가 줄었어요. 다음 주엔 더 화이팅!`)
-    if (wr.thisVolume > 0 && wr.lastVolume > 0) {
-      const diff = Math.round((wr.thisVolume - wr.lastVolume) / wr.lastVolume * 100)
-      if (diff > 10) lines.push(`총 볼륨이 지난 주보다 ${diff}% 늘었어요. 점진적 과부하 잘 지키고 있어요!`)
-      else if (diff < -10) lines.push(`볼륨이 지난 주보다 ${Math.abs(diff)}% 줄었어요. 의도적 디로드라면 좋아요.`)
-    }
-    if (wr.prs.length) lines.push(`신기록 달성: ${wr.prs.map(p => `${p.exercise} 1RM ${p.oneRM}kg`).join(', ')} 🎉`)
-    if (wr.missingGroups.length > 2) lines.push(`${wr.missingGroups.slice(0,3).join(', ')} 부위를 다음 주에 챙겨보세요.`)
-    if (wr.startW !== null && wr.endW !== null) {
-      const wDiff = (wr.endW - wr.startW).toFixed(1)
-      if (wDiff < 0) lines.push(`체중이 ${Math.abs(wDiff)}kg 줄었어요.`)
-      else if (wDiff > 0) lines.push(`체중이 ${wDiff}kg 늘었어요.`)
-    }
+  if (type === 'weekly') {
+    periodStart = thisMonday.toISOString().slice(0,10)
+    periodEnd   = now.toISOString().slice(0,10)
+    periodLabel = `${now.getFullYear()}년 ${thisMonday.getMonth()+1}월 ${thisMonday.getDate()}일 주`
+    targetWorkouts = workouts.value.filter(w => w.date >= periodStart)
+    targetWeights  = weightLogs.value.filter(w => w.date >= periodStart)
+    // 직전 8주 데이터도 함께
+    const eightWeeksAgo = new Date(thisMonday); eightWeeksAgo.setDate(thisMonday.getDate()-56)
+    var prevWorkouts = workouts.value.filter(w => w.date >= eightWeeksAgo.toISOString().slice(0,10) && w.date < periodStart)
+    var prevWeights  = weightLogs.value.filter(w => w.date >= eightWeeksAgo.toISOString().slice(0,10) && w.date < periodStart)
   } else {
-    const mr = monthlyReport.value
-    if (mr.thisDays >= 20) lines.push(`${mr.month}월 ${mr.thisDays}일 운동! 엄청난 꾸준함이에요 🏆`)
-    else if (mr.thisDays >= 12) lines.push(`이번 달 ${mr.thisDays}일 운동했어요. 좋은 루틴을 만들어가고 있어요.`)
-    else lines.push(`이번 달 ${mr.thisDays}일 운동했어요. 조금씩 더 늘려봐요!`)
-    if (mr.thisVolume > 0 && mr.lastVolume > 0) {
-      const diff = Math.round((mr.thisVolume - mr.lastVolume) / mr.lastVolume * 100)
-      if (diff > 0) lines.push(`지난 달보다 볼륨 ${diff}% 증가. 성장하고 있어요!`)
-    }
-    if (mr.mostImproved) lines.push(`이번 달 가장 발전한 운동: ${mr.mostImproved.ex} (+${mr.mostImproved.gain}kg 1RM) 💪`)
-    if (mr.topEx) lines.push(`가장 많이 한 운동은 ${mr.topEx} (${mr.topExCnt}회)예요.`)
-    if (mr.startW !== null && mr.endW !== null) {
-      const wDiff = (mr.endW - mr.startW).toFixed(1)
-      lines.push(`이번 달 체중 변화: ${wDiff > 0 ? '+' : ''}${wDiff}kg`)
-    }
+    periodStart = `${yr}-${String(mo+1).padStart(2,'0')}-01`
+    periodEnd   = now.toISOString().slice(0,10)
+    periodLabel = `${yr}년 ${mo+1}월`
+    targetWorkouts = workouts.value.filter(w => w.date >= periodStart)
+    targetWeights  = weightLogs.value.filter(w => w.date >= periodStart)
+    const threeMonthsAgo = new Date(yr, mo-3, 1)
+    var prevWorkouts = workouts.value.filter(w => { const d = new Date(w.date); return d >= threeMonthsAgo && w.date < periodStart })
+    var prevWeights  = weightLogs.value.filter(w => { const d = new Date(w.date); return d >= threeMonthsAgo && w.date < periodStart })
   }
 
-  reportComment.value = lines.length ? lines.join(' ') : '데이터가 더 쌓이면 코멘트가 나와요!'
-  commentLoading.value = false
+  return { type, periodStart, periodEnd, periodLabel, targetWorkouts, targetWeights, prevWorkouts, prevWeights }
+}
+
+const generateReport = async (type) => {
+  reportGenerating.value = true
+  const payload = buildReportPayload(type)
+
+  // TODO: Claude API 연결 후 아래 내용 교체
+  // const response = await fetch(CLAUDE_EDGE_URL, { method:'POST', ... body: JSON.stringify(payload) })
+  // const { content } = await response.json()
+
+  // 현재는 placeholder 저장
+  const placeholder = `[${payload.periodLabel} 보고서]\n\nClaude API 연결 후 자동 생성됩니다.\n\n이번 기간 운동 기록: ${payload.targetWorkouts.length}건\n체중 기록: ${payload.targetWeights.length}건`
+
+  const { data, error } = await supabase.from('reports').insert({
+    type: payload.type,
+    period_label: payload.periodLabel,
+    period_start: payload.periodStart,
+    content: placeholder
+  }).select().single()
+
+  if (!error && data) {
+    reports.value.unshift(data)
+    selectedReport.value = data
+  }
+  reportGenerating.value = false
 }
 
 const muscleBalance = computed(() => {
@@ -1413,98 +1428,112 @@ const scrapByStock = computed(() => {
             <!-- 헬스 탭 -->
             <template v-if="tab==='health'">
 
-              <!-- 리포트 -->
+              <!-- 보고서 -->
               <div class="card">
                 <div class="report-header">
-                  <div class="card-title" style="margin:0">리포트</div>
+                  <div class="card-title" style="margin:0">보고서</div>
                   <div class="report-tabs">
-                    <button :class="['rtab', reportTab==='weekly'&&'rtab-on']" @click="reportTab='weekly';reportComment=''">주간</button>
-                    <button :class="['rtab', reportTab==='monthly'&&'rtab-on']" @click="reportTab='monthly';reportComment=''">월간</button>
+                    <button :class="['rtab', reportTab==='weekly'&&'rtab-on']" @click="reportTab='weekly';selectedReport=null">주간</button>
+                    <button :class="['rtab', reportTab==='monthly'&&'rtab-on']" @click="reportTab='monthly';selectedReport=null">월간</button>
                   </div>
                 </div>
 
-                <!-- 주간 -->
-                <template v-if="reportTab==='weekly'">
-                  <div class="report-label">{{ weeklyReport.label }}</div>
-                  <div class="report-grid">
-                    <div class="rg-item">
-                      <div class="rg-val">{{ weeklyReport.thisDays }}일</div>
-                      <div class="rg-label">운동 일수
-                        <span v-if="weeklyReport.lastDays" :class="weeklyReport.thisDays >= weeklyReport.lastDays ? 'badge-up' : 'badge-down'">
-                          {{ weeklyReport.thisDays >= weeklyReport.lastDays ? '▲' : '▼' }} 지난 주 {{ weeklyReport.lastDays }}일
-                        </span>
-                      </div>
-                    </div>
-                    <div class="rg-item">
-                      <div class="rg-val">{{ weeklyReport.thisVolume.toLocaleString('ko-KR') }}kg</div>
-                      <div class="rg-label">총 볼륨
-                        <span v-if="weeklyReport.lastVolume" :class="weeklyReport.thisVolume >= weeklyReport.lastVolume ? 'badge-up' : 'badge-down'">
-                          {{ weeklyReport.thisVolume >= weeklyReport.lastVolume ? '+' : '' }}{{ weeklyReport.lastVolume ? Math.round((weeklyReport.thisVolume-weeklyReport.lastVolume)/weeklyReport.lastVolume*100) : 0 }}%
-                        </span>
-                      </div>
-                    </div>
-                    <div class="rg-item">
-                      <div class="rg-val">{{ weeklyReport.topGroupCnt ? weeklyReport.topGroup : '-' }}</div>
-                      <div class="rg-label">최다 부위</div>
-                    </div>
-                    <div class="rg-item">
-                      <div class="rg-val" :style="weeklyReport.endW && weeklyReport.startW ? (weeklyReport.endW < weeklyReport.startW ? 'color:#3b82f6' : 'color:#ef4444') : ''">
-                        {{ weeklyReport.endW ? weeklyReport.endW + 'kg' : '-' }}
-                      </div>
-                      <div class="rg-label">현재 체중</div>
-                    </div>
+                <!-- 보고서 뷰어 -->
+                <template v-if="selectedReport">
+                  <div class="report-viewer-header">
+                    <button @click="selectedReport=null" class="btn-back-report">← 목록</button>
+                    <span class="rv-label">{{ selectedReport.period_label }}</span>
                   </div>
-                  <div v-if="weeklyReport.prs.length" class="report-prs">
-                    <span v-for="p in weeklyReport.prs" :key="p.exercise" class="pr-badge">🏅 {{ p.exercise }} {{ p.oneRM }}kg</span>
-                  </div>
-                  <div v-if="weeklyReport.missingGroups.length" class="report-missing">
-                    ⚠️ 안 한 부위: {{ weeklyReport.missingGroups.join(', ') }}
-                  </div>
+                  <div class="report-viewer-body">{{ selectedReport.content }}</div>
                 </template>
 
-                <!-- 월간 -->
+                <!-- 보고서 목록 -->
                 <template v-else>
-                  <div class="report-label">{{ monthlyReport.month }}월</div>
-                  <div class="report-grid">
-                    <div class="rg-item">
-                      <div class="rg-val">{{ monthlyReport.thisDays }}일</div>
-                      <div class="rg-label">운동 일수 / {{ monthlyReport.daysInMonth }}일</div>
-                    </div>
-                    <div class="rg-item">
-                      <div class="rg-val">{{ monthlyReport.thisVolume.toLocaleString('ko-KR') }}kg</div>
-                      <div class="rg-label">총 볼륨
-                        <span v-if="monthlyReport.lastVolume" :class="monthlyReport.thisVolume >= monthlyReport.lastVolume ? 'badge-up' : 'badge-down'">
-                          {{ monthlyReport.thisVolume >= monthlyReport.lastVolume ? '+' : '' }}{{ monthlyReport.lastVolume ? Math.round((monthlyReport.thisVolume-monthlyReport.lastVolume)/monthlyReport.lastVolume*100) : 0 }}%
-                        </span>
+                  <!-- 이번 주/달 요약 수치 -->
+                  <template v-if="reportTab==='weekly'">
+                    <div class="report-label">{{ weeklyReport.label }}</div>
+                    <div class="report-grid">
+                      <div class="rg-item">
+                        <div class="rg-val">{{ weeklyReport.thisDays }}일</div>
+                        <div class="rg-label">운동 일수
+                          <span v-if="weeklyReport.lastDays" :class="weeklyReport.thisDays >= weeklyReport.lastDays ? 'badge-up' : 'badge-down'">
+                            {{ weeklyReport.thisDays >= weeklyReport.lastDays ? '▲' : '▼' }} 지난주 {{ weeklyReport.lastDays }}일
+                          </span>
+                        </div>
+                      </div>
+                      <div class="rg-item">
+                        <div class="rg-val">{{ weeklyReport.thisVolume.toLocaleString('ko-KR') }}kg</div>
+                        <div class="rg-label">총 볼륨
+                          <span v-if="weeklyReport.lastVolume" :class="weeklyReport.thisVolume >= weeklyReport.lastVolume ? 'badge-up' : 'badge-down'">
+                            {{ weeklyReport.thisVolume >= weeklyReport.lastVolume ? '+' : '' }}{{ weeklyReport.lastVolume ? Math.round((weeklyReport.thisVolume-weeklyReport.lastVolume)/weeklyReport.lastVolume*100) : 0 }}%
+                          </span>
+                        </div>
+                      </div>
+                      <div class="rg-item">
+                        <div class="rg-val">{{ weeklyReport.topGroupCnt ? weeklyReport.topGroup : '-' }}</div>
+                        <div class="rg-label">최다 부위</div>
+                      </div>
+                      <div class="rg-item">
+                        <div class="rg-val">{{ weeklyReport.endW ? weeklyReport.endW+'kg' : '-' }}</div>
+                        <div class="rg-label">현재 체중</div>
                       </div>
                     </div>
-                    <div class="rg-item">
-                      <div class="rg-val">{{ monthlyReport.topEx || '-' }}</div>
-                      <div class="rg-label">최다 운동 {{ monthlyReport.topExCnt ? monthlyReport.topExCnt+'회' : '' }}</div>
+                    <div v-if="weeklyReport.prs.length" class="report-prs">
+                      <span v-for="p in weeklyReport.prs" :key="p.exercise" class="pr-badge">🏅 {{ p.exercise }} {{ p.oneRM }}kg</span>
                     </div>
-                    <div class="rg-item">
-                      <div class="rg-val" :style="monthlyReport.endW && monthlyReport.startW && monthlyReport.endW < monthlyReport.startW ? 'color:#3b82f6' : ''">
-                        {{ monthlyReport.endW ? monthlyReport.endW + 'kg' : '-' }}
+                  </template>
+                  <template v-else>
+                    <div class="report-label">{{ monthlyReport.month }}월</div>
+                    <div class="report-grid">
+                      <div class="rg-item">
+                        <div class="rg-val">{{ monthlyReport.thisDays }}일</div>
+                        <div class="rg-label">운동 일수 / {{ monthlyReport.daysInMonth }}일</div>
                       </div>
-                      <div class="rg-label">체중 변화
-                        <span v-if="monthlyReport.startW && monthlyReport.endW">
-                          {{ (monthlyReport.endW - monthlyReport.startW).toFixed(1) > 0 ? '+' : '' }}{{ (monthlyReport.endW - monthlyReport.startW).toFixed(1) }}kg
-                        </span>
+                      <div class="rg-item">
+                        <div class="rg-val">{{ monthlyReport.thisVolume.toLocaleString('ko-KR') }}kg</div>
+                        <div class="rg-label">총 볼륨
+                          <span v-if="monthlyReport.lastVolume" :class="monthlyReport.thisVolume >= monthlyReport.lastVolume ? 'badge-up' : 'badge-down'">
+                            {{ monthlyReport.thisVolume >= monthlyReport.lastVolume ? '+' : '' }}{{ monthlyReport.lastVolume ? Math.round((monthlyReport.thisVolume-monthlyReport.lastVolume)/monthlyReport.lastVolume*100) : 0 }}%
+                          </span>
+                        </div>
                       </div>
+                      <div class="rg-item">
+                        <div class="rg-val">{{ monthlyReport.topEx || '-' }}</div>
+                        <div class="rg-label">최다 운동</div>
+                      </div>
+                      <div class="rg-item">
+                        <div class="rg-val">{{ monthlyReport.endW ? monthlyReport.endW+'kg' : '-' }}</div>
+                        <div class="rg-label">체중
+                          <span v-if="monthlyReport.startW && monthlyReport.endW">
+                            {{ (monthlyReport.endW - monthlyReport.startW).toFixed(1) > 0 ? '+' : '' }}{{ (monthlyReport.endW - monthlyReport.startW).toFixed(1) }}kg
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="monthlyReport.mostImproved" class="report-prs">
+                      <span class="pr-badge">💪 {{ monthlyReport.mostImproved.ex }} +{{ monthlyReport.mostImproved.gain }}kg</span>
+                    </div>
+                  </template>
+
+                  <!-- 보고서 생성 버튼 -->
+                  <button @click="generateReport(reportTab)" class="btn-gen-report" :disabled="reportGenerating">
+                    {{ reportGenerating ? '생성 중...' : '📄 이번 ' + (reportTab==='weekly' ? '주' : '달') + ' 보고서 생성' }}
+                  </button>
+
+                  <!-- 과거 보고서 목록 -->
+                  <div v-if="reports.filter(r=>r.type===reportTab).length" class="past-reports">
+                    <div class="past-reports-title">저장된 보고서</div>
+                    <div v-for="r in reports.filter(x=>x.type===reportTab)" :key="r.id"
+                      class="past-report-item" @click="selectedReport=r">
+                      <div class="pri-label">{{ r.period_label }}</div>
+                      <div class="pri-date">{{ r.created_at?.slice(0,10) }}</div>
+                      <span class="pri-arrow">›</span>
                     </div>
                   </div>
-                  <div v-if="monthlyReport.mostImproved" class="report-prs">
-                    <span class="pr-badge">💪 {{ monthlyReport.mostImproved.ex }} +{{ monthlyReport.mostImproved.gain }}kg</span>
+                  <div v-else class="empty-td" style="padding:12px;text-align:center;font-size:13px">
+                    아직 저장된 보고서가 없어요
                   </div>
                 </template>
-
-                <!-- 코멘트 -->
-                <div class="report-comment-area">
-                  <div v-if="reportComment" class="report-comment">{{ reportComment }}</div>
-                  <button @click="generateComment" class="btn-comment" :disabled="commentLoading">
-                    {{ commentLoading ? '분석 중...' : '💬 코멘트 받기' }}
-                  </button>
-                </div>
               </div>
 
               <!-- 요약 카드 -->
@@ -2109,8 +2138,19 @@ const scrapByStock = computed(() => {
 .report-missing { font-size:12px; color:#f59e0b; margin-bottom:8px; }
 .report-comment-area { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
 .report-comment { background:#f0f0fa; border-radius:10px; padding:12px 14px; font-size:13px; color:#333; line-height:1.6; border-left:3px solid #6c47ff; }
-.btn-comment { background:#6c47ff; color:#fff; border:none; border-radius:20px; padding:8px 20px; font-size:13px; cursor:pointer; align-self:flex-start; }
-.btn-comment:disabled { opacity:0.6; cursor:default; }
+.btn-gen-report { width:100%; background:#6c47ff; color:#fff; border:none; border-radius:10px; padding:10px; font-size:14px; cursor:pointer; margin-top:12px; }
+.btn-gen-report:disabled { opacity:0.6; cursor:default; }
+.past-reports { margin-top:14px; display:flex; flex-direction:column; gap:6px; }
+.past-reports-title { font-size:12px; color:#888; margin-bottom:4px; }
+.past-report-item { display:flex; align-items:center; justify-content:space-between; background:#f5f5ff; border-radius:10px; padding:12px 14px; cursor:pointer; }
+.past-report-item:hover { background:#ebebff; }
+.pri-label { font-size:14px; font-weight:600; color:#1a1a3a; }
+.pri-date { font-size:12px; color:#888; margin-left:auto; margin-right:8px; }
+.pri-arrow { color:#6c47ff; font-size:18px; }
+.report-viewer-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.btn-back-report { background:none; border:1px solid #d0d0e8; border-radius:20px; padding:4px 12px; font-size:13px; color:#555; cursor:pointer; }
+.rv-label { font-size:14px; font-weight:600; color:#1a1a3a; }
+.report-viewer-body { white-space:pre-wrap; font-size:14px; line-height:1.8; color:#333; background:#f8f8ff; border-radius:10px; padding:16px; min-height:200px; }
 .alert-card { background:#3a1a1a; border:1px solid #ef4444; border-radius:10px; padding:12px 16px; color:#fca5a5; font-size:13px; }
 .batch-modal { max-height:90vh; overflow-y:auto; }
 .batch-entry-box { background:#f8f8ff; border-radius:10px; padding:14px; margin-bottom:12px; }
