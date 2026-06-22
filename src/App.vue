@@ -188,6 +188,10 @@ const simTrades   = ref([])
 const workouts        = ref([])
 const weightLogs      = ref([])
 const reports         = ref([])
+const workoutMemos    = ref([])
+const memoDate        = ref(new Date().toISOString().slice(0,10))
+const memoContent     = ref('')
+const memoSaving      = ref(false)
 const showAddWorkout  = ref(false)
 const showAddWeight   = ref(false)
 const selectedReport   = ref(null)
@@ -408,7 +412,7 @@ const stopInactivityWatch = () => {
 const fetchAll = async () => {
   loading.value = true
   try {
-    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes, reportRes, profileRes] = await Promise.all([
+    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes, reportRes, profileRes, memoRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
       supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
       supabase.from('sim_balance').select('*').eq('id', 1).maybeSingle(),
@@ -417,7 +421,8 @@ const fetchAll = async () => {
       supabase.from('workouts').select('*').order('date', { ascending: false }),
       supabase.from('weight_logs').select('*').order('date'),
       supabase.from('reports').select('*').order('period_start', { ascending: false }),
-      supabase.from('user_profile').select('*').eq('id', 1).maybeSingle()
+      supabase.from('user_profile').select('*').eq('id', 1).maybeSingle(),
+      supabase.from('workout_memos').select('*').order('date', { ascending: false })
     ])
     if (stockRes.data) stocks.value = stockRes.data
     if (newsRes.data)  {
@@ -431,6 +436,7 @@ const fetchAll = async () => {
     if (weightRes.data)  weightLogs.value = weightRes.data
     if (reportRes.data)  reports.value   = reportRes.data
     if (profileRes.data) profile.value  = { height: profileRes.data.height||'', age: profileRes.data.age||'', gender: profileRes.data.gender||'남', goal: profileRes.data.goal||'' }
+    if (memoRes.data)    workoutMemos.value = memoRes.data
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
@@ -875,6 +881,30 @@ const deleteWeight = async (id) => {
   if (!error) weightLogs.value = weightLogs.value.filter(w => w.id !== id)
 }
 
+const saveMemo = async () => {
+  if (!memoContent.value.trim()) return
+  memoSaving.value = true
+  const { data, error } = await supabase.from('workout_memos')
+    .upsert({ date: memoDate.value, content: memoContent.value.trim() }, { onConflict: 'date' })
+    .select().single()
+  if (!error && data) {
+    const idx = workoutMemos.value.findIndex(m => m.date === data.date)
+    if (idx >= 0) workoutMemos.value[idx] = data
+    else workoutMemos.value.unshift(data)
+    memoContent.value = ''
+  }
+  memoSaving.value = false
+}
+const deleteMemo = async (id) => {
+  const { error } = await supabase.from('workout_memos').delete().eq('id', id)
+  if (!error) workoutMemos.value = workoutMemos.value.filter(m => m.id !== id)
+}
+const loadMemoForDate = (date) => {
+  const existing = workoutMemos.value.find(m => m.date === date)
+  memoDate.value = date
+  memoContent.value = existing?.content || ''
+}
+
 // ── 헬스 분석
 const selectedExercise = ref('')
 const reportTab        = ref('weekly')
@@ -930,6 +960,13 @@ const copyWorkoutData = () => {
   if (weightLogs.value.length) {
     lines.push('[체중 기록]')
     weightLogs.value.slice(-20).forEach(w => lines.push(`${w.date}: ${w.weight}kg`))
+    lines.push('')
+  }
+  if (workoutMemos.value.length) {
+    lines.push('[운동 일지]')
+    workoutMemos.value.slice(-20).forEach(m => {
+      lines.push(`${m.date}: ${m.content}`)
+    })
     lines.push('')
   }
   lines.push('[집계]')
@@ -1805,6 +1842,27 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
+              <!-- 운동 일지 -->
+              <div class="card mt16">
+                <div class="card-title">운동 일지</div>
+                <div class="memo-input-row">
+                  <input v-model="memoDate" type="date" class="input-field" style="width:auto" @change="loadMemoForDate(memoDate)" />
+                  <textarea v-model="memoContent" class="input-field memo-input"
+                    placeholder="오늘 컨디션, 느낀 점, 특이사항 등 자유롭게..." rows="2"></textarea>
+                  <button @click="saveMemo" class="btn-primary" style="white-space:nowrap" :disabled="memoSaving||!memoContent.trim()">
+                    {{ memoSaving ? '...' : '저장' }}
+                  </button>
+                </div>
+                <div v-if="workoutMemos.length" class="memo-list">
+                  <div v-for="m in workoutMemos.slice(0,10)" :key="m.id" class="memo-item">
+                    <div class="memo-date">{{ m.date }}</div>
+                    <div class="memo-content">{{ m.content }}</div>
+                    <button @click="deleteMemo(m.id)" class="btn-sm del">삭제</button>
+                  </div>
+                </div>
+                <div v-else class="empty-td" style="padding:12px;text-align:center;font-size:13px">운동 후 느낀 점을 기록해보세요</div>
+              </div>
+
               <!-- 부위별 주간 볼륨 + 총 횟수 -->
               <div class="card mt16">
                 <div class="card-title">부위별 운동량</div>
@@ -2438,6 +2496,12 @@ const scrapByStock = computed(() => {
 .report-missing { font-size:12px; color:#f59e0b; margin-bottom:8px; }
 .report-comment-area { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
 .report-comment { background:#f0f0fa; border-radius:10px; padding:12px 14px; font-size:13px; color:#333; line-height:1.6; border-left:3px solid #6c47ff; }
+.memo-input-row { display:flex; flex-direction:column; gap:8px; }
+.memo-input { resize:vertical; font-size:13px; line-height:1.5; }
+.memo-list { display:flex; flex-direction:column; gap:8px; margin-top:12px; border-top:1px solid #eee; padding-top:12px; }
+.memo-item { display:flex; align-items:flex-start; gap:8px; background:#f8f8ff; border-radius:8px; padding:10px 12px; }
+.memo-date { font-size:11px; color:#888; white-space:nowrap; padding-top:2px; }
+.memo-content { flex:1; font-size:13px; color:#333; line-height:1.5; }
 .btn-paste-report { background:#f0f0fa; color:#6c47ff; border:1px solid #6c47ff; border-radius:10px; padding:10px 16px; font-size:13px; cursor:pointer; white-space:nowrap; }
 .paste-textarea { width:100%; min-height:200px; resize:vertical; font-size:13px; line-height:1.6; }
 .btn-copy-data { background:#22c55e; color:#fff; border:none; border-radius:20px; padding:6px 14px; font-size:13px; cursor:pointer; }
