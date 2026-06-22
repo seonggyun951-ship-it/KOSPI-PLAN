@@ -223,6 +223,7 @@ const showBatchWorkout  = ref(false)
 const batchDate         = ref(new Date().toISOString().slice(0,10))
 const batchItems        = ref([])
 const batchSaving       = ref(false)
+const batchMemo         = ref('')
 const supersetMode      = ref(false)
 const supersetGroupId   = ref(null)
 
@@ -839,7 +840,19 @@ const saveBatchWorkout = async () => {
   if (!error && data) {
     data.forEach(w => workouts.value.unshift(w))
     workouts.value.sort((a, b) => b.date.localeCompare(a.date))
+    // 후기도 같이 저장
+    if (batchMemo.value.trim()) {
+      const { data: mData } = await supabase.from('workout_memos')
+        .upsert({ date: batchDate.value, content: batchMemo.value.trim() }, { onConflict: 'date' })
+        .select().single()
+      if (mData) {
+        const idx = workoutMemos.value.findIndex(m => m.date === mData.date)
+        if (idx >= 0) workoutMemos.value[idx] = mData
+        else workoutMemos.value.unshift(mData)
+      }
+    }
     batchItems.value = []
+    batchMemo.value = ''
     batchDate.value = new Date().toISOString().slice(0,10)
     supersetMode.value = false
     supersetGroupId.value = null
@@ -1843,24 +1856,15 @@ const scrapByStock = computed(() => {
               </div>
 
               <!-- 운동 일지 -->
-              <div class="card mt16">
+              <div class="card mt16" v-if="workoutMemos.length">
                 <div class="card-title">운동 일지</div>
-                <div class="memo-input-row">
-                  <input v-model="memoDate" type="date" class="input-field" style="width:auto" @change="loadMemoForDate(memoDate)" />
-                  <textarea v-model="memoContent" class="input-field memo-input"
-                    placeholder="오늘 컨디션, 느낀 점, 특이사항 등 자유롭게..." rows="2"></textarea>
-                  <button @click="saveMemo" class="btn-primary" style="white-space:nowrap" :disabled="memoSaving||!memoContent.trim()">
-                    {{ memoSaving ? '...' : '저장' }}
-                  </button>
-                </div>
-                <div v-if="workoutMemos.length" class="memo-list">
+                <div class="memo-list">
                   <div v-for="m in workoutMemos.slice(0,10)" :key="m.id" class="memo-item">
                     <div class="memo-date">{{ m.date }}</div>
                     <div class="memo-content">{{ m.content }}</div>
                     <button @click="deleteMemo(m.id)" class="btn-sm del">삭제</button>
                   </div>
                 </div>
-                <div v-else class="empty-td" style="padding:12px;text-align:center;font-size:13px">운동 후 느낀 점을 기록해보세요</div>
               </div>
 
               <!-- 부위별 주간 볼륨 + 총 횟수 -->
@@ -2074,7 +2078,14 @@ const scrapByStock = computed(() => {
             </div>
           </div>
 
-          <div class="modal-btns" style="margin-top:16px">
+          <!-- 오늘 운동 후기 -->
+          <div class="form-group" style="margin-top:12px">
+            <label>오늘 후기 (선택)</label>
+            <textarea v-model="batchMemo" class="input-field" rows="2"
+              placeholder="컨디션, 느낀 점, 특이사항 등..."></textarea>
+          </div>
+
+          <div class="modal-btns" style="margin-top:12px">
             <button @click="showBatchWorkout=false" class="btn-cancel">닫기</button>
             <button @click="saveBatchWorkout" class="btn-primary" :disabled="!batchItems.length || batchSaving">
               {{ batchSaving ? '저장 중...' : `전체 저장 (${batchItems.length}개)` }}
