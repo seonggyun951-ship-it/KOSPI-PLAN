@@ -386,7 +386,7 @@ const logout = async () => {
 const fetchAll = async () => {
   loading.value = true
   try {
-    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes, reportRes] = await Promise.all([
+    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes, reportRes, profileRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
       supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
       supabase.from('sim_balance').select('*').eq('id', 1).maybeSingle(),
@@ -394,7 +394,8 @@ const fetchAll = async () => {
       supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }),
       supabase.from('workouts').select('*').order('date', { ascending: false }),
       supabase.from('weight_logs').select('*').order('date'),
-      supabase.from('reports').select('*').order('period_start', { ascending: false })
+      supabase.from('reports').select('*').order('period_start', { ascending: false }),
+      supabase.from('user_profile').select('*').eq('id', 1).maybeSingle()
     ])
     if (stockRes.data) stocks.value = stockRes.data
     if (newsRes.data)  {
@@ -407,6 +408,7 @@ const fetchAll = async () => {
     if (workoutRes.data) workouts.value  = workoutRes.data
     if (weightRes.data)  weightLogs.value = weightRes.data
     if (reportRes.data)  reports.value   = reportRes.data
+    if (profileRes.data) profile.value  = { height: profileRes.data.height||'', age: profileRes.data.age||'', gender: profileRes.data.gender||'남', goal: profileRes.data.goal||'' }
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
@@ -856,9 +858,11 @@ const reportTab        = ref('weekly')
 const reportComment    = ref('')
 const commentLoading   = ref(false)
 
-// 프로필 (localStorage)
-const profile = ref(JSON.parse(localStorage.getItem('health_profile') || '{"height":"","age":"","gender":"남","goal":""}'))
-const saveProfile = () => { localStorage.setItem('health_profile', JSON.stringify(profile.value)) }
+// 프로필
+const profile = ref({ height:'', age:'', gender:'남', goal:'' })
+const saveProfile = async () => {
+  await supabase.from('user_profile').upsert({ id:1, ...profile.value })
+}
 
 // 데이터 복사
 const copyWorkoutData = () => {
