@@ -796,6 +796,130 @@ const deleteWeight = async (id) => {
 
 // ── 헬스 분석
 const selectedExercise = ref('')
+const reportTab        = ref('weekly') // 'weekly' | 'monthly'
+const reportComment    = ref('')
+const commentLoading   = ref(false)
+
+const calcVolume = (w) => w.sets * w.reps * w.weight
+const calcOneRM  = (w) => w.weight > 0 && w.reps > 0 ? Math.round(w.weight * (1 + w.reps / 30)) : 0
+
+const weeklyReport = computed(() => {
+  const now = new Date()
+  const dow = now.getDay()
+  const thisMonday = new Date(now)
+  thisMonday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1))
+  thisMonday.setHours(0,0,0,0)
+  const lastMonday = new Date(thisMonday); lastMonday.setDate(thisMonday.getDate() - 7)
+
+  const thisWeek = workouts.value.filter(w => new Date(w.date) >= thisMonday)
+  const lastWeek = workouts.value.filter(w => { const d = new Date(w.date); return d >= lastMonday && d < thisMonday })
+
+  const thisVolume = thisWeek.reduce((s, w) => s + calcVolume(w), 0)
+  const lastVolume = lastWeek.reduce((s, w) => s + calcVolume(w), 0)
+  const thisDays = new Set(thisWeek.map(w => w.date)).size
+  const lastDays = new Set(lastWeek.map(w => w.date)).size
+
+  const groups = {}; MUSCLE_GROUPS.forEach(g => groups[g] = 0)
+  thisWeek.forEach(w => { if (groups[w.muscle_group] !== undefined) groups[w.muscle_group]++ })
+  const topGroup = Object.entries(groups).sort((a,b) => b[1]-a[1])[0]
+  const missingGroups = Object.entries(groups).filter(([,c]) => c === 0).map(([g]) => g)
+
+  const prs = []
+  const seen = new Set()
+  thisWeek.forEach(w => {
+    if (seen.has(w.exercise) || !calcOneRM(w)) return
+    const prevMax = Math.max(0, ...workouts.value
+      .filter(x => x.exercise === w.exercise && new Date(x.date) < thisMonday)
+      .map(calcOneRM))
+    if (calcOneRM(w) > prevMax) { prs.push({ exercise: w.exercise, oneRM: calcOneRM(w) }); seen.add(w.exercise) }
+  })
+
+  const wWeights = weightLogs.value.filter(w => new Date(w.date) >= thisMonday)
+  const lwWeights = weightLogs.value.filter(w => { const d = new Date(w.date); return d >= lastMonday && d < thisMonday })
+  const startW = lwWeights.length ? lwWeights[lwWeights.length-1].weight : wWeights[0]?.weight ?? null
+  const endW   = wWeights.length  ? wWeights[wWeights.length-1].weight  : null
+
+  const label = `${thisMonday.getMonth()+1}/${thisMonday.getDate()} ~ ${now.getMonth()+1}/${now.getDate()}`
+  return { label, thisDays, lastDays, thisVolume, lastVolume, topGroup: topGroup?.[0], topGroupCnt: topGroup?.[1]||0, missingGroups, prs, startW, endW }
+})
+
+const monthlyReport = computed(() => {
+  const now = new Date()
+  const yr = now.getFullYear(), mo = now.getMonth()
+  const lyr = mo === 0 ? yr-1 : yr, lmo = mo === 0 ? 11 : mo-1
+
+  const thisM = workouts.value.filter(w => { const d = new Date(w.date); return d.getFullYear()===yr && d.getMonth()===mo })
+  const lastM = workouts.value.filter(w => { const d = new Date(w.date); return d.getFullYear()===lyr && d.getMonth()===lmo })
+
+  const thisVolume = thisM.reduce((s,w) => s+calcVolume(w), 0)
+  const lastVolume = lastM.reduce((s,w) => s+calcVolume(w), 0)
+  const thisDays   = new Set(thisM.map(w => w.date)).size
+  const daysInMonth = new Date(yr, mo+1, 0).getDate()
+
+  const exCount = {}
+  thisM.forEach(w => { exCount[w.exercise] = (exCount[w.exercise]||0)+1 })
+  const topEx = Object.entries(exCount).sort((a,b)=>b[1]-a[1])[0]
+
+  const exRM = {}
+  thisM.forEach(w => {
+    if (!exRM[w.exercise]) exRM[w.exercise] = []
+    exRM[w.exercise].push(calcOneRM(w))
+  })
+  const mostImproved = Object.entries(exRM)
+    .map(([ex, rms]) => ({ ex, gain: rms[rms.length-1] - rms[0] }))
+    .filter(x => x.gain > 0).sort((a,b) => b.gain-a.gain)[0]
+
+  const mWeights = weightLogs.value.filter(w => { const d = new Date(w.date); return d.getFullYear()===yr && d.getMonth()===mo })
+  return { month: mo+1, thisDays, daysInMonth, thisVolume, lastVolume, topEx: topEx?.[0], topExCnt: topEx?.[1]||0, mostImproved, startW: mWeights[0]?.weight??null, endW: mWeights[mWeights.length-1]?.weight??null }
+})
+
+// 코멘트 생성 — 현재는 규칙 기반, 나중에 API로 교체
+const generateComment = async () => {
+  commentLoading.value = true
+  reportComment.value = ''
+  await new Promise(r => setTimeout(r, 400))
+
+  const r = reportTab.value === 'weekly' ? weeklyReport.value : monthlyReport.value
+  const lines = []
+
+  if (reportTab.value === 'weekly') {
+    const wr = weeklyReport.value
+    if (wr.thisDays === 0) lines.push('이번 주 운동 기록이 없어요. 작은 것부터 시작해봐요 💪')
+    else if (wr.thisDays >= 5) lines.push(`이번 주 ${wr.thisDays}일 운동! 정말 대단해요 🔥`)
+    else if (wr.thisDays > wr.lastDays) lines.push(`지난 주보다 ${wr.thisDays - wr.lastDays}일 더 운동했어요. 좋은 흐름이에요!`)
+    else if (wr.thisDays < wr.lastDays) lines.push(`지난 주보다 운동 일수가 줄었어요. 다음 주엔 더 화이팅!`)
+    if (wr.thisVolume > 0 && wr.lastVolume > 0) {
+      const diff = Math.round((wr.thisVolume - wr.lastVolume) / wr.lastVolume * 100)
+      if (diff > 10) lines.push(`총 볼륨이 지난 주보다 ${diff}% 늘었어요. 점진적 과부하 잘 지키고 있어요!`)
+      else if (diff < -10) lines.push(`볼륨이 지난 주보다 ${Math.abs(diff)}% 줄었어요. 의도적 디로드라면 좋아요.`)
+    }
+    if (wr.prs.length) lines.push(`신기록 달성: ${wr.prs.map(p => `${p.exercise} 1RM ${p.oneRM}kg`).join(', ')} 🎉`)
+    if (wr.missingGroups.length > 2) lines.push(`${wr.missingGroups.slice(0,3).join(', ')} 부위를 다음 주에 챙겨보세요.`)
+    if (wr.startW !== null && wr.endW !== null) {
+      const wDiff = (wr.endW - wr.startW).toFixed(1)
+      if (wDiff < 0) lines.push(`체중이 ${Math.abs(wDiff)}kg 줄었어요.`)
+      else if (wDiff > 0) lines.push(`체중이 ${wDiff}kg 늘었어요.`)
+    }
+  } else {
+    const mr = monthlyReport.value
+    if (mr.thisDays >= 20) lines.push(`${mr.month}월 ${mr.thisDays}일 운동! 엄청난 꾸준함이에요 🏆`)
+    else if (mr.thisDays >= 12) lines.push(`이번 달 ${mr.thisDays}일 운동했어요. 좋은 루틴을 만들어가고 있어요.`)
+    else lines.push(`이번 달 ${mr.thisDays}일 운동했어요. 조금씩 더 늘려봐요!`)
+    if (mr.thisVolume > 0 && mr.lastVolume > 0) {
+      const diff = Math.round((mr.thisVolume - mr.lastVolume) / mr.lastVolume * 100)
+      if (diff > 0) lines.push(`지난 달보다 볼륨 ${diff}% 증가. 성장하고 있어요!`)
+    }
+    if (mr.mostImproved) lines.push(`이번 달 가장 발전한 운동: ${mr.mostImproved.ex} (+${mr.mostImproved.gain}kg 1RM) 💪`)
+    if (mr.topEx) lines.push(`가장 많이 한 운동은 ${mr.topEx} (${mr.topExCnt}회)예요.`)
+    if (mr.startW !== null && mr.endW !== null) {
+      const wDiff = (mr.endW - mr.startW).toFixed(1)
+      lines.push(`이번 달 체중 변화: ${wDiff > 0 ? '+' : ''}${wDiff}kg`)
+    }
+  }
+
+  reportComment.value = lines.length ? lines.join(' ') : '데이터가 더 쌓이면 코멘트가 나와요!'
+  commentLoading.value = false
+}
 
 const muscleBalance = computed(() => {
   const map = {}
@@ -1288,6 +1412,101 @@ const scrapByStock = computed(() => {
 
             <!-- 헬스 탭 -->
             <template v-if="tab==='health'">
+
+              <!-- 리포트 -->
+              <div class="card">
+                <div class="report-header">
+                  <div class="card-title" style="margin:0">리포트</div>
+                  <div class="report-tabs">
+                    <button :class="['rtab', reportTab==='weekly'&&'rtab-on']" @click="reportTab='weekly';reportComment=''">주간</button>
+                    <button :class="['rtab', reportTab==='monthly'&&'rtab-on']" @click="reportTab='monthly';reportComment=''">월간</button>
+                  </div>
+                </div>
+
+                <!-- 주간 -->
+                <template v-if="reportTab==='weekly'">
+                  <div class="report-label">{{ weeklyReport.label }}</div>
+                  <div class="report-grid">
+                    <div class="rg-item">
+                      <div class="rg-val">{{ weeklyReport.thisDays }}일</div>
+                      <div class="rg-label">운동 일수
+                        <span v-if="weeklyReport.lastDays" :class="weeklyReport.thisDays >= weeklyReport.lastDays ? 'badge-up' : 'badge-down'">
+                          {{ weeklyReport.thisDays >= weeklyReport.lastDays ? '▲' : '▼' }} 지난 주 {{ weeklyReport.lastDays }}일
+                        </span>
+                      </div>
+                    </div>
+                    <div class="rg-item">
+                      <div class="rg-val">{{ weeklyReport.thisVolume.toLocaleString('ko-KR') }}kg</div>
+                      <div class="rg-label">총 볼륨
+                        <span v-if="weeklyReport.lastVolume" :class="weeklyReport.thisVolume >= weeklyReport.lastVolume ? 'badge-up' : 'badge-down'">
+                          {{ weeklyReport.thisVolume >= weeklyReport.lastVolume ? '+' : '' }}{{ weeklyReport.lastVolume ? Math.round((weeklyReport.thisVolume-weeklyReport.lastVolume)/weeklyReport.lastVolume*100) : 0 }}%
+                        </span>
+                      </div>
+                    </div>
+                    <div class="rg-item">
+                      <div class="rg-val">{{ weeklyReport.topGroupCnt ? weeklyReport.topGroup : '-' }}</div>
+                      <div class="rg-label">최다 부위</div>
+                    </div>
+                    <div class="rg-item">
+                      <div class="rg-val" :style="weeklyReport.endW && weeklyReport.startW ? (weeklyReport.endW < weeklyReport.startW ? 'color:#3b82f6' : 'color:#ef4444') : ''">
+                        {{ weeklyReport.endW ? weeklyReport.endW + 'kg' : '-' }}
+                      </div>
+                      <div class="rg-label">현재 체중</div>
+                    </div>
+                  </div>
+                  <div v-if="weeklyReport.prs.length" class="report-prs">
+                    <span v-for="p in weeklyReport.prs" :key="p.exercise" class="pr-badge">🏅 {{ p.exercise }} {{ p.oneRM }}kg</span>
+                  </div>
+                  <div v-if="weeklyReport.missingGroups.length" class="report-missing">
+                    ⚠️ 안 한 부위: {{ weeklyReport.missingGroups.join(', ') }}
+                  </div>
+                </template>
+
+                <!-- 월간 -->
+                <template v-else>
+                  <div class="report-label">{{ monthlyReport.month }}월</div>
+                  <div class="report-grid">
+                    <div class="rg-item">
+                      <div class="rg-val">{{ monthlyReport.thisDays }}일</div>
+                      <div class="rg-label">운동 일수 / {{ monthlyReport.daysInMonth }}일</div>
+                    </div>
+                    <div class="rg-item">
+                      <div class="rg-val">{{ monthlyReport.thisVolume.toLocaleString('ko-KR') }}kg</div>
+                      <div class="rg-label">총 볼륨
+                        <span v-if="monthlyReport.lastVolume" :class="monthlyReport.thisVolume >= monthlyReport.lastVolume ? 'badge-up' : 'badge-down'">
+                          {{ monthlyReport.thisVolume >= monthlyReport.lastVolume ? '+' : '' }}{{ monthlyReport.lastVolume ? Math.round((monthlyReport.thisVolume-monthlyReport.lastVolume)/monthlyReport.lastVolume*100) : 0 }}%
+                        </span>
+                      </div>
+                    </div>
+                    <div class="rg-item">
+                      <div class="rg-val">{{ monthlyReport.topEx || '-' }}</div>
+                      <div class="rg-label">최다 운동 {{ monthlyReport.topExCnt ? monthlyReport.topExCnt+'회' : '' }}</div>
+                    </div>
+                    <div class="rg-item">
+                      <div class="rg-val" :style="monthlyReport.endW && monthlyReport.startW && monthlyReport.endW < monthlyReport.startW ? 'color:#3b82f6' : ''">
+                        {{ monthlyReport.endW ? monthlyReport.endW + 'kg' : '-' }}
+                      </div>
+                      <div class="rg-label">체중 변화
+                        <span v-if="monthlyReport.startW && monthlyReport.endW">
+                          {{ (monthlyReport.endW - monthlyReport.startW).toFixed(1) > 0 ? '+' : '' }}{{ (monthlyReport.endW - monthlyReport.startW).toFixed(1) }}kg
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="monthlyReport.mostImproved" class="report-prs">
+                    <span class="pr-badge">💪 {{ monthlyReport.mostImproved.ex }} +{{ monthlyReport.mostImproved.gain }}kg</span>
+                  </div>
+                </template>
+
+                <!-- 코멘트 -->
+                <div class="report-comment-area">
+                  <div v-if="reportComment" class="report-comment">{{ reportComment }}</div>
+                  <button @click="generateComment" class="btn-comment" :disabled="commentLoading">
+                    {{ commentLoading ? '분석 중...' : '💬 코멘트 받기' }}
+                  </button>
+                </div>
+              </div>
+
               <!-- 요약 카드 -->
               <div class="summary-grid">
                 <div class="summary-card total">
@@ -1874,6 +2093,24 @@ const scrapByStock = computed(() => {
 .muscle-bar { background:#6c47ff; height:100%; border-radius:4px; transition:width 0.4s; }
 .muscle-cnt { color:#c0c0e0; text-align:right; font-size:12px; }
 
+.report-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.report-tabs { display:flex; gap:4px; }
+.rtab { padding:4px 14px; border-radius:20px; border:1px solid #d0d0e8; background:transparent; color:#888; font-size:13px; cursor:pointer; }
+.rtab-on { background:#6c47ff; border-color:#6c47ff; color:#fff; }
+.report-label { font-size:12px; color:#888; margin-bottom:10px; }
+.report-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
+.rg-item { background:#f5f5ff; border-radius:10px; padding:10px 14px; }
+.rg-val { font-size:18px; font-weight:700; color:#1a1a3a; }
+.rg-label { font-size:11px; color:#888; margin-top:2px; display:flex; flex-direction:column; gap:2px; }
+.badge-up { color:#22c55e; font-size:11px; }
+.badge-down { color:#ef4444; font-size:11px; }
+.report-prs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.pr-badge { background:#fef3c7; color:#92400e; border-radius:20px; padding:4px 10px; font-size:12px; font-weight:600; }
+.report-missing { font-size:12px; color:#f59e0b; margin-bottom:8px; }
+.report-comment-area { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
+.report-comment { background:#f0f0fa; border-radius:10px; padding:12px 14px; font-size:13px; color:#333; line-height:1.6; border-left:3px solid #6c47ff; }
+.btn-comment { background:#6c47ff; color:#fff; border:none; border-radius:20px; padding:8px 20px; font-size:13px; cursor:pointer; align-self:flex-start; }
+.btn-comment:disabled { opacity:0.6; cursor:default; }
 .alert-card { background:#3a1a1a; border:1px solid #ef4444; border-radius:10px; padding:12px 16px; color:#fca5a5; font-size:13px; }
 .batch-modal { max-height:90vh; overflow-y:auto; }
 .batch-entry-box { background:#f8f8ff; border-radius:10px; padding:14px; margin-bottom:12px; }
