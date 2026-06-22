@@ -196,11 +196,30 @@ const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:''
 const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
 
 // 날짜별 일괄 입력
-const showBatchWorkout = ref(false)
-const batchDate = ref(new Date().toISOString().slice(0,10))
-const batchItems = ref([])
-const batchSaving = ref(false)
-const batchEntry = ref({ muscle_group:'가슴', exercise:'', customExercise:'', sets:3, reps:10, weight:0 })
+const showBatchWorkout  = ref(false)
+const batchDate         = ref(new Date().toISOString().slice(0,10))
+const batchItems        = ref([])
+const batchSaving       = ref(false)
+const supersetMode      = ref(false)
+const supersetGroupId   = ref(null)
+
+const freshEntry = () => ({ muscle_group:'가슴', exercise:'', customExercise:'', set_type:'normal',
+  set_logs:[{ weight:0, reps:10, type:'normal' }] })
+const batchEntry = ref(freshEntry())
+
+const addSetLog = () => {
+  const last = batchEntry.value.set_logs.at(-1)
+  batchEntry.value.set_logs.push({ weight: last?.weight ?? 0, reps: last?.reps ?? 10, type:'normal' })
+}
+const removeSetLog = (i) => { if (batchEntry.value.set_logs.length > 1) batchEntry.value.set_logs.splice(i, 1) }
+const addDropSet = () => {
+  const last = batchEntry.value.set_logs.at(-1)
+  batchEntry.value.set_logs.push({ weight: Math.max(0, (last?.weight ?? 0) - 5), reps: last?.reps ?? 10, type:'dropset' })
+}
+const toggleFailure = (i) => {
+  const s = batchEntry.value.set_logs[i]
+  s.type = s.type === 'failure' ? 'normal' : 'failure'
+}
 const MUSCLE_GROUPS = ['가슴','등','어깨','하체','삼두','이두','코어','유산소']
 const EXERCISE_DB = {
   '가슴': [
@@ -740,15 +759,26 @@ const addBatchItem = () => {
   const exerciseName = batchEntry.value.exercise === '__custom__'
     ? batchEntry.value.customExercise.trim()
     : batchEntry.value.exercise.trim()
-  if (!exerciseName) return
+  if (!exerciseName || !batchEntry.value.set_logs.length) return
+
+  const logs    = batchEntry.value.set_logs
+  const hasDropset = logs.some(s => s.type === 'dropset')
+  const setType = hasDropset ? 'dropset' : (supersetMode.value ? 'superset' : 'normal')
+  const bestSet = [...logs].sort((a,b) => (b.weight*b.reps)-(a.weight*a.reps))[0]
+
+  if (supersetMode.value && !supersetGroupId.value) supersetGroupId.value = crypto.randomUUID()
+
   batchItems.value.push({
-    muscle_group: batchEntry.value.muscle_group,
-    exercise: exerciseName,
-    sets: batchEntry.value.sets,
-    reps: batchEntry.value.reps,
-    weight: batchEntry.value.weight
+    muscle_group:    batchEntry.value.muscle_group,
+    exercise:        exerciseName,
+    sets:            logs.length,
+    reps:            bestSet.reps,
+    weight:          bestSet.weight,
+    set_logs:        logs,
+    set_type:        setType,
+    superset_group:  supersetMode.value ? supersetGroupId.value : null
   })
-  batchEntry.value = { ...batchEntry.value, exercise: '', customExercise: '', sets: 3, reps: 10, weight: 0 }
+  batchEntry.value = freshEntry()
 }
 const removeBatchItem = (i) => { batchItems.value.splice(i, 1) }
 const saveBatchWorkout = async () => {
@@ -761,6 +791,8 @@ const saveBatchWorkout = async () => {
     workouts.value.sort((a, b) => b.date.localeCompare(a.date))
     batchItems.value = []
     batchDate.value = new Date().toISOString().slice(0,10)
+    supersetMode.value = false
+    supersetGroupId.value = null
     showBatchWorkout.value = false
   }
   batchSaving.value = false
@@ -805,8 +837,15 @@ const reportTab        = ref('weekly') // 'weekly' | 'monthly'
 const reportComment    = ref('')
 const commentLoading   = ref(false)
 
-const calcVolume = (w) => w.sets * w.reps * w.weight
-const calcOneRM  = (w) => w.weight > 0 && w.reps > 0 ? Math.round(w.weight * (1 + w.reps / 30)) : 0
+const calcVolume = (w) => {
+  if (w.set_logs?.length) return w.set_logs.reduce((s, l) => s + (l.weight||0) * (l.reps||0), 0)
+  return (w.sets||0) * (w.reps||0) * (w.weight||0)
+}
+const calcOneRM = (w) => {
+  if (w.set_logs?.length) return Math.max(0, ...w.set_logs.map(l =>
+    l.weight > 0 && l.reps > 0 ? Math.round(l.weight * (1 + l.reps / 30)) : 0))
+  return w.weight > 0 && w.reps > 0 ? Math.round(w.weight * (1 + w.reps / 30)) : 0
+}
 
 const weeklyReport = computed(() => {
   const now = new Date()
@@ -1661,22 +1700,31 @@ const scrapByStock = computed(() => {
                     <button @click="showAddWorkout=true" class="btn-add-top">+ 1개</button>
                   </div>
                 </div>
-                <div class="table-wrap">
-                  <table class="stock-table">
-                    <thead><tr><th>날짜</th><th>운동</th><th>부위</th><th>세트</th><th>횟수</th><th>무게</th><th></th></tr></thead>
-                    <tbody>
-                      <tr v-for="w in workouts.slice(0,20)" :key="w.id">
-                        <td>{{ w.date }}</td>
-                        <td>{{ w.exercise }}</td>
-                        <td>{{ w.muscle_group }}</td>
-                        <td>{{ w.sets }}</td>
-                        <td>{{ w.reps }}</td>
-                        <td>{{ w.weight }}kg</td>
-                        <td><button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button></td>
-                      </tr>
-                      <tr v-if="!workouts.length"><td colspan="7" class="empty-td">운동을 기록해보세요</td></tr>
-                    </tbody>
-                  </table>
+                <div class="workout-log-list">
+                  <div v-for="w in workouts.slice(0,30)" :key="w.id" class="wl-item">
+                    <div class="wl-header">
+                      <div class="wl-left">
+                        <span class="wl-date">{{ w.date }}</span>
+                        <span v-if="w.set_type==='superset'" class="tag-superset">슈퍼세트</span>
+                        <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
+                        <span class="wl-group">{{ w.muscle_group }}</span>
+                      </div>
+                      <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
+                    </div>
+                    <div class="wl-name">{{ w.exercise }}</div>
+                    <div class="wl-sets">
+                      <template v-if="w.set_logs?.length">
+                        <span v-for="(s, si) in w.set_logs" :key="si"
+                          :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
+                          {{ si+1 }}. {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
+                        </span>
+                      </template>
+                      <template v-else>
+                        <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
+                      </template>
+                    </div>
+                  </div>
+                  <div v-if="!workouts.length" class="empty-td" style="padding:16px;text-align:center">운동을 기록해보세요</div>
                 </div>
               </div>
             </template>
@@ -1703,14 +1751,21 @@ const scrapByStock = computed(() => {
         <div class="modal batch-modal">
           <h3>날짜별 운동 입력</h3>
 
-          <!-- 날짜 -->
-          <div class="form-group" style="margin-bottom:14px">
-            <label>날짜</label>
-            <input v-model="batchDate" type="date" class="input-field" />
+          <!-- 날짜 + 슈퍼세트 토글 -->
+          <div class="form-row" style="margin-bottom:14px">
+            <div class="form-group"><label>날짜</label><input v-model="batchDate" type="date" class="input-field" /></div>
+            <div class="form-group" style="justify-content:flex-end">
+              <label style="margin-bottom:6px">슈퍼세트 모드</label>
+              <button :class="['superset-toggle', supersetMode && 'superset-on']"
+                @click="supersetMode=!supersetMode; supersetGroupId=null">
+                {{ supersetMode ? '켜짐' : '꺼짐' }}
+              </button>
+            </div>
           </div>
 
-          <!-- 운동 추가 폼 -->
+          <!-- 운동 + 세트 입력 -->
           <div class="batch-entry-box">
+            <!-- 부위 / 종목 -->
             <div class="form-row">
               <div class="form-group">
                 <label>부위</label>
@@ -1728,22 +1783,49 @@ const scrapByStock = computed(() => {
                 <input v-if="batchEntry.exercise==='__custom__'" v-model="batchEntry.customExercise" class="input-field" style="margin-top:6px" placeholder="운동 이름" />
               </div>
             </div>
-            <div class="form-row">
-              <div class="form-group"><label>세트</label><input v-model.number="batchEntry.sets" type="number" class="input-field" /></div>
-              <div class="form-group"><label>횟수</label><input v-model.number="batchEntry.reps" type="number" class="input-field" /></div>
-              <div class="form-group"><label>무게(kg)</label><input v-model.number="batchEntry.weight" type="number" class="input-field" /></div>
+
+            <!-- 세트별 입력 -->
+            <div class="set-logs-header">
+              <span>세트</span><span>무게(kg)</span><span>횟수</span><span>실패</span><span></span>
             </div>
-            <button @click="addBatchItem" class="btn-primary" style="width:100%;margin-top:4px">+ 목록에 추가</button>
+            <div v-for="(s, i) in batchEntry.set_logs" :key="i" :class="['set-log-row', s.type==='dropset'&&'row-drop', s.type==='failure'&&'row-fail']">
+              <span class="set-num-badge" :class="s.type==='dropset'?'badge-drop':s.type==='failure'?'badge-fail':''">
+                {{ s.type==='dropset' ? '↓' : s.type==='failure' ? 'F' : i+1 }}
+              </span>
+              <input v-model.number="s.weight" type="number" class="set-mini-input" placeholder="0" />
+              <input v-model.number="s.reps"   type="number" class="set-mini-input" placeholder="0" />
+              <button :class="['fail-btn', s.type==='failure'&&'fail-on']" @click="toggleFailure(i)">●</button>
+              <button @click="removeSetLog(i)" class="btn-sm del" style="padding:2px 6px">✕</button>
+            </div>
+
+            <!-- 세트 추가 버튼들 -->
+            <div class="set-add-row">
+              <button @click="addSetLog" class="set-add-btn">+ 일반</button>
+              <button @click="addDropSet" class="set-add-btn drop">+ 드롭</button>
+            </div>
+
+            <button @click="addBatchItem" class="btn-primary" style="width:100%;margin-top:8px"
+              :disabled="!batchEntry.exercise || batchEntry.exercise==='__custom__'&&!batchEntry.customExercise">
+              {{ supersetMode ? '+ 슈퍼세트로 추가' : '+ 목록에 추가' }}
+            </button>
           </div>
 
           <!-- 추가된 운동 목록 -->
           <div v-if="batchItems.length" class="batch-list">
             <div class="batch-list-title">추가된 운동 ({{ batchItems.length }}개)</div>
-            <div v-for="(item, i) in batchItems" :key="i" class="batch-item">
+            <div v-for="(item, i) in batchItems" :key="i" :class="['batch-item', item.set_type==='superset'&&'batch-superset']">
               <div class="bi-info">
-                <span class="bi-group">{{ item.muscle_group }}</span>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span v-if="item.set_type==='superset'" class="tag-superset">슈퍼세트</span>
+                  <span v-if="item.set_type==='dropset'" class="tag-dropset">드롭세트</span>
+                  <span class="bi-group">{{ item.muscle_group }}</span>
+                </div>
                 <span class="bi-name">{{ item.exercise }}</span>
-                <span class="bi-detail">{{ item.sets }}세트 × {{ item.reps }}회 / {{ item.weight }}kg</span>
+                <div class="bi-sets">
+                  <span v-for="(s, si) in item.set_logs" :key="si" :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
+                    {{ s.weight }}kg×{{ s.reps }}{{ s.type==='failure'?'(F)':'' }}
+                  </span>
+                </div>
               </div>
               <button @click="removeBatchItem(i)" class="btn-sm del">✕</button>
             </div>
@@ -2154,13 +2236,42 @@ const scrapByStock = computed(() => {
 .alert-card { background:#3a1a1a; border:1px solid #ef4444; border-radius:10px; padding:12px 16px; color:#fca5a5; font-size:13px; }
 .batch-modal { max-height:90vh; overflow-y:auto; }
 .batch-entry-box { background:#f8f8ff; border-radius:10px; padding:14px; margin-bottom:12px; }
-.batch-list { display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; }
+.batch-list { display:flex; flex-direction:column; gap:6px; max-height:240px; overflow-y:auto; }
 .batch-list-title { font-size:12px; color:#888; margin-bottom:4px; }
-.batch-item { display:flex; align-items:center; justify-content:space-between; background:#f0f0fa; border-radius:8px; padding:8px 10px; }
-.bi-info { display:flex; flex-direction:column; gap:2px; }
+.batch-item { display:flex; align-items:flex-start; justify-content:space-between; background:#f0f0fa; border-radius:8px; padding:8px 10px; }
+.batch-superset { border-left:3px solid #f59e0b; }
+.bi-info { display:flex; flex-direction:column; gap:4px; flex:1; }
 .bi-group { font-size:11px; color:#888; }
 .bi-name { font-size:13px; font-weight:600; color:#1a1a3a; }
-.bi-detail { font-size:12px; color:#555; }
+.bi-sets { display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }
+.superset-toggle { padding:6px 14px; border-radius:20px; border:1px solid #d0d0e8; background:#f0f0fa; color:#888; cursor:pointer; font-size:13px; }
+.superset-on { background:#f59e0b; border-color:#f59e0b; color:#fff; }
+.set-logs-header { display:grid; grid-template-columns:28px 1fr 1fr 32px 28px; gap:4px; font-size:11px; color:#888; margin-bottom:4px; text-align:center; }
+.set-log-row { display:grid; grid-template-columns:28px 1fr 1fr 32px 28px; gap:4px; align-items:center; margin-bottom:4px; border-radius:6px; padding:2px 0; }
+.row-drop { background:#fff7ed; }
+.row-fail { background:#fef2f2; }
+.set-num-badge { width:24px; height:24px; border-radius:50%; background:#e0e0f0; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#555; }
+.badge-drop { background:#fed7aa; color:#c2410c; }
+.badge-fail { background:#fecaca; color:#b91c1c; }
+.set-mini-input { width:100%; border:1px solid #d0d0e8; border-radius:6px; padding:4px 6px; font-size:13px; text-align:center; }
+.fail-btn { width:28px; height:28px; border-radius:50%; border:2px solid #d0d0e8; background:#fff; color:#ccc; cursor:pointer; font-size:14px; line-height:1; }
+.fail-on { border-color:#ef4444; color:#ef4444; background:#fef2f2; }
+.set-add-row { display:flex; gap:6px; margin-top:8px; }
+.set-add-btn { flex:1; padding:6px; border-radius:8px; border:1px dashed #d0d0e8; background:#f8f8ff; color:#555; cursor:pointer; font-size:12px; }
+.set-add-btn.drop { border-color:#f59e0b; color:#d97706; background:#fffbeb; }
+.set-chip { display:inline-block; background:#e8e8f8; border-radius:20px; padding:2px 8px; font-size:11px; color:#444; }
+.chip-drop { background:#fed7aa; color:#c2410c; }
+.chip-fail { background:#fecaca; color:#b91c1c; }
+.tag-superset { background:#fef3c7; color:#92400e; border-radius:20px; padding:2px 8px; font-size:11px; font-weight:600; }
+.tag-dropset { background:#fff7ed; color:#c2410c; border-radius:20px; padding:2px 8px; font-size:11px; font-weight:600; }
+.workout-log-list { display:flex; flex-direction:column; gap:8px; }
+.wl-item { background:#f8f8ff; border-radius:10px; padding:10px 12px; }
+.wl-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+.wl-left { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.wl-date { font-size:11px; color:#888; }
+.wl-group { font-size:11px; color:#888; }
+.wl-name { font-size:14px; font-weight:700; color:#1a1a3a; margin-bottom:6px; }
+.wl-sets { display:flex; flex-wrap:wrap; gap:4px; }
 .weekly-chart { display:flex; gap:6px; align-items:flex-end; height:100px; padding-top:8px; }
 .wc-col { display:flex; flex-direction:column; align-items:center; flex:1; gap:2px; }
 .wc-bar-wrap { width:100%; flex:1; display:flex; align-items:flex-end; }
