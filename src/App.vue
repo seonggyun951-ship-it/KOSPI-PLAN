@@ -191,6 +191,13 @@ const showAddWorkout = ref(false)
 const showAddWeight  = ref(false)
 const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' })
 const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
+
+// 날짜별 일괄 입력
+const showBatchWorkout = ref(false)
+const batchDate = ref(new Date().toISOString().slice(0,10))
+const batchItems = ref([])
+const batchSaving = ref(false)
+const batchEntry = ref({ muscle_group:'가슴', exercise:'', customExercise:'', sets:3, reps:10, weight:0 })
 const MUSCLE_GROUPS = ['가슴','등','어깨','하체','삼두','이두','코어','유산소']
 const EXERCISE_DB = {
   '가슴': [
@@ -724,6 +731,36 @@ const simReset = async () => {
 }
 
 // ── 헬스 CRUD
+const addBatchItem = () => {
+  const exerciseName = batchEntry.value.exercise === '__custom__'
+    ? batchEntry.value.customExercise.trim()
+    : batchEntry.value.exercise.trim()
+  if (!exerciseName) return
+  batchItems.value.push({
+    muscle_group: batchEntry.value.muscle_group,
+    exercise: exerciseName,
+    sets: batchEntry.value.sets,
+    reps: batchEntry.value.reps,
+    weight: batchEntry.value.weight
+  })
+  batchEntry.value = { ...batchEntry.value, exercise: '', customExercise: '', sets: 3, reps: 10, weight: 0 }
+}
+const removeBatchItem = (i) => { batchItems.value.splice(i, 1) }
+const saveBatchWorkout = async () => {
+  if (!batchItems.value.length) return
+  batchSaving.value = true
+  const rows = batchItems.value.map(item => ({ ...item, date: batchDate.value, memo: '' }))
+  const { data, error } = await supabase.from('workouts').insert(rows).select()
+  if (!error && data) {
+    data.forEach(w => workouts.value.unshift(w))
+    workouts.value.sort((a, b) => b.date.localeCompare(a.date))
+    batchItems.value = []
+    batchDate.value = new Date().toISOString().slice(0,10)
+    showBatchWorkout.value = false
+  }
+  batchSaving.value = false
+}
+
 const addWorkout = async () => {
   const exerciseName = newWorkout.value.exercise === '__custom__'
     ? (newWorkout.value.customExercise || '').trim()
@@ -1371,7 +1408,10 @@ const scrapByStock = computed(() => {
               <div class="card mt16">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
                   <div class="card-title" style="margin:0">운동 기록</div>
-                  <button @click="showAddWorkout=true" class="btn-add-top">+ 운동 추가</button>
+                  <div style="display:flex;gap:6px">
+                    <button @click="showBatchWorkout=true;batchDate=new Date().toISOString().slice(0,10);batchItems=[]" class="btn-add-top">날짜별 입력</button>
+                    <button @click="showAddWorkout=true" class="btn-add-top">+ 1개</button>
+                  </div>
                 </div>
                 <div class="table-wrap">
                   <table class="stock-table">
@@ -1406,6 +1446,66 @@ const scrapByStock = computed(() => {
           <div class="modal-btns">
             <button @click="showAddWeight=false" class="btn-cancel">취소</button>
             <button @click="addWeight" class="btn-primary">저장</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 날짜별 일괄 입력 모달 -->
+      <div v-if="showBatchWorkout" class="modal-overlay" @click.self="showBatchWorkout=false">
+        <div class="modal batch-modal">
+          <h3>날짜별 운동 입력</h3>
+
+          <!-- 날짜 -->
+          <div class="form-group" style="margin-bottom:14px">
+            <label>날짜</label>
+            <input v-model="batchDate" type="date" class="input-field" />
+          </div>
+
+          <!-- 운동 추가 폼 -->
+          <div class="batch-entry-box">
+            <div class="form-row">
+              <div class="form-group">
+                <label>부위</label>
+                <select v-model="batchEntry.muscle_group" class="input-field" @change="batchEntry.exercise='';batchEntry.customExercise=''">
+                  <option v-for="g in MUSCLE_GROUPS" :key="g">{{ g }}</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>종목</label>
+                <select v-model="batchEntry.exercise" class="input-field">
+                  <option value="" disabled>선택</option>
+                  <option v-for="ex in EXERCISE_DB[batchEntry.muscle_group] || []" :key="ex" :value="ex">{{ ex }}</option>
+                  <option value="__custom__">직접 입력...</option>
+                </select>
+                <input v-if="batchEntry.exercise==='__custom__'" v-model="batchEntry.customExercise" class="input-field" style="margin-top:6px" placeholder="운동 이름" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>세트</label><input v-model.number="batchEntry.sets" type="number" class="input-field" /></div>
+              <div class="form-group"><label>횟수</label><input v-model.number="batchEntry.reps" type="number" class="input-field" /></div>
+              <div class="form-group"><label>무게(kg)</label><input v-model.number="batchEntry.weight" type="number" class="input-field" /></div>
+            </div>
+            <button @click="addBatchItem" class="btn-primary" style="width:100%;margin-top:4px">+ 목록에 추가</button>
+          </div>
+
+          <!-- 추가된 운동 목록 -->
+          <div v-if="batchItems.length" class="batch-list">
+            <div class="batch-list-title">추가된 운동 ({{ batchItems.length }}개)</div>
+            <div v-for="(item, i) in batchItems" :key="i" class="batch-item">
+              <div class="bi-info">
+                <span class="bi-group">{{ item.muscle_group }}</span>
+                <span class="bi-name">{{ item.exercise }}</span>
+                <span class="bi-detail">{{ item.sets }}세트 × {{ item.reps }}회 / {{ item.weight }}kg</span>
+              </div>
+              <button @click="removeBatchItem(i)" class="btn-sm del">✕</button>
+            </div>
+          </div>
+
+          <div class="modal-btns" style="margin-top:16px">
+            <button @click="showBatchWorkout=false" class="btn-cancel">닫기</button>
+            <button @click="saveBatchWorkout" class="btn-primary" :disabled="!batchItems.length || batchSaving">
+              {{ batchSaving ? '저장 중...' : `전체 저장 (${batchItems.length}개)` }}
+            </button>
           </div>
         </div>
       </div>
@@ -1775,6 +1875,15 @@ const scrapByStock = computed(() => {
 .muscle-cnt { color:#c0c0e0; text-align:right; font-size:12px; }
 
 .alert-card { background:#3a1a1a; border:1px solid #ef4444; border-radius:10px; padding:12px 16px; color:#fca5a5; font-size:13px; }
+.batch-modal { max-height:90vh; overflow-y:auto; }
+.batch-entry-box { background:#f8f8ff; border-radius:10px; padding:14px; margin-bottom:12px; }
+.batch-list { display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; }
+.batch-list-title { font-size:12px; color:#888; margin-bottom:4px; }
+.batch-item { display:flex; align-items:center; justify-content:space-between; background:#f0f0fa; border-radius:8px; padding:8px 10px; }
+.bi-info { display:flex; flex-direction:column; gap:2px; }
+.bi-group { font-size:11px; color:#888; }
+.bi-name { font-size:13px; font-weight:600; color:#1a1a3a; }
+.bi-detail { font-size:12px; color:#555; }
 .weekly-chart { display:flex; gap:6px; align-items:flex-end; height:100px; padding-top:8px; }
 .wc-col { display:flex; flex-direction:column; align-items:center; flex:1; gap:2px; }
 .wc-bar-wrap { width:100%; flex:1; display:flex; align-items:flex-end; }
