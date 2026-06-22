@@ -183,6 +183,15 @@ const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', memo:'', t
 const simBalance  = ref(0)
 const simHoldings = ref([])
 const simTrades   = ref([])
+
+// ── 헬스
+const workouts      = ref([])
+const weightLogs    = ref([])
+const showAddWorkout = ref(false)
+const showAddWeight  = ref(false)
+const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' })
+const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
+const MUSCLE_GROUPS = ['가슴','등','어깨','팔','하체','복근','전신']
 const showSimBuy  = ref(false)
 const simSellTarget = ref(null)
 const simBuyForm  = ref({ name:'', ticker:'', quantity:'', price:'' })
@@ -240,12 +249,14 @@ const logout = async () => {
 const fetchAll = async () => {
   loading.value = true
   try {
-    const [stockRes, newsRes, balRes, holdRes, tradeRes] = await Promise.all([
+    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
       supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
       supabase.from('sim_balance').select('*').eq('id', 1).maybeSingle(),
       supabase.from('sim_holdings').select('*').order('created_at'),
-      supabase.from('sim_trades').select('*').order('traded_at', { ascending: false })
+      supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }),
+      supabase.from('workouts').select('*').order('date', { ascending: false }),
+      supabase.from('weight_logs').select('*').order('date')
     ])
     if (stockRes.data) stocks.value = stockRes.data
     if (newsRes.data)  {
@@ -255,6 +266,8 @@ const fetchAll = async () => {
     simBalance.value  = balRes.data?.cash ?? 10000000
     if (holdRes.data)  simHoldings.value = holdRes.data
     if (tradeRes.data) simTrades.value   = tradeRes.data
+    if (workoutRes.data) workouts.value  = workoutRes.data
+    if (weightRes.data)  weightLogs.value = weightRes.data
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
@@ -621,6 +634,58 @@ const simReset = async () => {
   simBalance.value = 10000000; simHoldings.value = []; simTrades.value = []
 }
 
+// ── 헬스 CRUD
+const addWorkout = async () => {
+  if (!newWorkout.value.exercise.trim()) return
+  const { data, error } = await supabase.from('workouts').insert({ ...newWorkout.value }).select().single()
+  if (!error && data) {
+    workouts.value.unshift(data)
+    newWorkout.value = { date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' }
+    showAddWorkout.value = false
+  }
+}
+const deleteWorkout = async (id) => {
+  const { error } = await supabase.from('workouts').delete().eq('id', id)
+  if (!error) workouts.value = workouts.value.filter(w => w.id !== id)
+}
+const addWeight = async () => {
+  if (!newWeight.value.weight) return
+  const { data, error } = await supabase.from('weight_logs').insert({ ...newWeight.value }).select().single()
+  if (!error && data) {
+    weightLogs.value.push(data)
+    weightLogs.value.sort((a,b) => a.date.localeCompare(b.date))
+    newWeight.value = { date: new Date().toISOString().slice(0,10), weight:'' }
+    showAddWeight.value = false
+  }
+}
+const deleteWeight = async (id) => {
+  const { error } = await supabase.from('weight_logs').delete().eq('id', id)
+  if (!error) weightLogs.value = weightLogs.value.filter(w => w.id !== id)
+}
+
+// ── 헬스 분석
+const muscleBalance = computed(() => {
+  const map = {}
+  MUSCLE_GROUPS.forEach(g => map[g] = 0)
+  workouts.value.forEach(w => { if (map[w.muscle_group] !== undefined) map[w.muscle_group]++ })
+  return map
+})
+const recentWeights = computed(() => weightLogs.value.slice(-12))
+const weightPlateau = computed(() => {
+  if (weightLogs.value.length < 4) return false
+  const last4 = weightLogs.value.slice(-4).map(w => w.weight)
+  const diff = Math.max(...last4) - Math.min(...last4)
+  return diff < 0.5
+})
+const strengthByExercise = computed(() => {
+  const map = {}
+  ;[...workouts.value].reverse().forEach(w => {
+    if (!map[w.exercise]) map[w.exercise] = []
+    map[w.exercise].push({ date: w.date, weight: w.weight })
+  })
+  return map
+})
+
 // 스크랩 종목별 그룹
 const scrapByStock = computed(() => {
   const map = {}
@@ -670,6 +735,7 @@ const scrapByStock = computed(() => {
               { key:'news',      icon:'📰', label:'뉴스'      },
               { key:'scrap',     icon:'🔖', label:'스크랩', badge: savedNews.length || null },
               { key:'sim',       icon:'🎮', label:'모의투자' },
+              { key:'health',    icon:'💪', label:'헬스'      },
             ]" :key="item.key"
               class="nav-item" :class="{ active: tab===item.key }"
               @click="tab=item.key; sideOpen=false">
@@ -691,7 +757,7 @@ const scrapByStock = computed(() => {
           <header class="top-bar">
             <button class="hamburger" @click="sideOpen=!sideOpen">☰</button>
             <h1 class="page-title">
-              {{ {dashboard:'대시보드',long:'장기투자',short:'단기투자',chart:'차트',news:'뉴스',scrap:'스크랩'}[tab] }}
+              {{ {dashboard:'대시보드',long:'장기투자',short:'단기투자',chart:'차트',news:'뉴스',scrap:'스크랩',sim:'모의투자',health:'헬스'}[tab] }}
             </h1>
             <div class="top-actions">
               <button class="btn-refresh" @click="refreshAllPrices" :disabled="refreshing">
@@ -1062,6 +1128,129 @@ const scrapByStock = computed(() => {
               </div>
             </template>
 
+            <!-- 헬스 탭 -->
+            <template v-if="tab==='health'">
+              <!-- 요약 카드 -->
+              <div class="summary-grid">
+                <div class="summary-card">
+                  <div class="sc-label">총 운동 기록</div>
+                  <div class="sc-value sm">{{ workouts.length }}회</div>
+                </div>
+                <div class="summary-card">
+                  <div class="sc-label">최근 체중</div>
+                  <div class="sc-value sm">{{ weightLogs.length ? weightLogs[weightLogs.length-1].weight + 'kg' : '-' }}</div>
+                </div>
+                <div class="summary-card" :class="weightPlateau ? 'loss' : ''">
+                  <div class="sc-label">체중 정체기</div>
+                  <div class="sc-value sm" style="font-size:16px">{{ weightPlateau ? '⚠️ 정체기' : '✅ 변화중' }}</div>
+                </div>
+                <div class="summary-card">
+                  <div class="sc-label">이번 주 운동</div>
+                  <div class="sc-value sm">{{ workouts.filter(w => new Date(w.date) >= new Date(Date.now()-7*86400000)).length }}회</div>
+                </div>
+              </div>
+
+              <!-- 부위 밸런스 -->
+              <div class="card mt16">
+                <div class="card-title">부위별 운동 횟수</div>
+                <div class="muscle-balance">
+                  <div v-for="(cnt, group) in muscleBalance" :key="group" class="muscle-row">
+                    <span class="muscle-name">{{ group }}</span>
+                    <div class="muscle-bar-wrap">
+                      <div class="muscle-bar" :style="{ width: (cnt / Math.max(...Object.values(muscleBalance), 1) * 100) + '%' }"></div>
+                    </div>
+                    <span class="muscle-cnt">{{ cnt }}회</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 체중 기록 -->
+              <div class="card mt16">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                  <div class="card-title" style="margin:0">체중 기록</div>
+                  <button @click="showAddWeight=true" class="btn-add-top">+ 체중 추가</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="stock-table">
+                    <thead><tr><th>날짜</th><th>체중 (kg)</th><th></th></tr></thead>
+                    <tbody>
+                      <tr v-for="w in [...weightLogs].reverse().slice(0,10)" :key="w.id">
+                        <td>{{ w.date }}</td>
+                        <td>{{ w.weight }}kg</td>
+                        <td><button @click="deleteWeight(w.id)" class="btn-sm del">삭제</button></td>
+                      </tr>
+                      <tr v-if="!weightLogs.length"><td colspan="3" class="empty-td">체중을 기록해보세요</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- 운동 기록 -->
+              <div class="card mt16">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                  <div class="card-title" style="margin:0">운동 기록</div>
+                  <button @click="showAddWorkout=true" class="btn-add-top">+ 운동 추가</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="stock-table">
+                    <thead><tr><th>날짜</th><th>운동</th><th>부위</th><th>세트</th><th>횟수</th><th>무게</th><th></th></tr></thead>
+                    <tbody>
+                      <tr v-for="w in workouts.slice(0,20)" :key="w.id">
+                        <td>{{ w.date }}</td>
+                        <td>{{ w.exercise }}</td>
+                        <td>{{ w.muscle_group }}</td>
+                        <td>{{ w.sets }}</td>
+                        <td>{{ w.reps }}</td>
+                        <td>{{ w.weight }}kg</td>
+                        <td><button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button></td>
+                      </tr>
+                      <tr v-if="!workouts.length"><td colspan="7" class="empty-td">운동을 기록해보세요</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </template>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- 체중 추가 모달 -->
+      <div v-if="showAddWeight" class="modal-overlay" @click.self="showAddWeight=false">
+        <div class="modal">
+          <h3>체중 기록</h3>
+          <div class="form-group"><label>날짜</label><input v-model="newWeight.date" type="date" class="input-field" /></div>
+          <div class="form-group"><label>체중 (kg)</label><input v-model="newWeight.weight" type="number" step="0.1" class="input-field" placeholder="72.5" /></div>
+          <div class="modal-btns">
+            <button @click="showAddWeight=false" class="btn-cancel">취소</button>
+            <button @click="addWeight" class="btn-primary">저장</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 운동 추가 모달 -->
+      <div v-if="showAddWorkout" class="modal-overlay" @click.self="showAddWorkout=false">
+        <div class="modal">
+          <h3>운동 기록</h3>
+          <div class="form-row">
+            <div class="form-group"><label>날짜</label><input v-model="newWorkout.date" type="date" class="input-field" /></div>
+            <div class="form-group">
+              <label>부위</label>
+              <select v-model="newWorkout.muscle_group" class="input-field">
+                <option v-for="g in MUSCLE_GROUPS" :key="g">{{ g }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group"><label>운동 이름</label><input v-model="newWorkout.exercise" class="input-field" placeholder="벤치프레스" /></div>
+          <div class="form-row">
+            <div class="form-group"><label>세트</label><input v-model.number="newWorkout.sets" type="number" class="input-field" /></div>
+            <div class="form-group"><label>횟수</label><input v-model.number="newWorkout.reps" type="number" class="input-field" /></div>
+            <div class="form-group"><label>무게 (kg)</label><input v-model.number="newWorkout.weight" type="number" class="input-field" /></div>
+          </div>
+          <div class="form-group"><label>메모</label><input v-model="newWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
+          <div class="modal-btns">
+            <button @click="showAddWorkout=false" class="btn-cancel">취소</button>
+            <button @click="addWorkout" class="btn-primary">저장</button>
           </div>
         </div>
       </div>
@@ -1388,6 +1577,12 @@ const scrapByStock = computed(() => {
 .pg-btn:hover:not(:disabled) { background:#3a3a5c; }
 .pg-btn:disabled { opacity:0.3; cursor:default; }
 .pg-info { color:#888; font-size:13px; min-width:50px; text-align:center; }
+.muscle-balance { display:flex; flex-direction:column; gap:8px; }
+.muscle-row { display:grid; grid-template-columns:50px 1fr 36px; align-items:center; gap:10px; font-size:13px; }
+.muscle-name { color:#888; }
+.muscle-bar-wrap { background:#2a2a45; border-radius:4px; height:10px; overflow:hidden; }
+.muscle-bar { background:#6c47ff; height:100%; border-radius:4px; transition:width 0.4s; }
+.muscle-cnt { color:#c0c0e0; text-align:right; font-size:12px; }
 
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
 .modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow:visible; }
