@@ -1745,14 +1745,15 @@ const scrapByStock = computed(() => {
                 ⚠️ 상대적으로 부족한 부위: <strong>{{ muscleImbalance.join(', ') }}</strong>
               </div>
 
-              <!-- 부위별 주간 볼륨 차트 -->
+              <!-- 부위별 주간 볼륨 + 총 횟수 -->
               <div class="card mt16">
-                <div class="card-title">부위별 주간 볼륨 (최근 6주)</div>
+                <div class="card-title">부위별 운동 현황</div>
                 <div class="muscle-legend">
                   <span v-for="g in MUSCLE_GROUPS" :key="g" class="legend-item">
                     <span class="legend-dot" :style="{background: MUSCLE_COLORS[g]}"></span>{{ g }}
                   </span>
                 </div>
+                <!-- 주간 볼륨 차트 -->
                 <div class="muscle-week-chart">
                   <div v-for="week in weeklyMuscleChart.weeks" :key="week.label" class="mwc-col">
                     <div class="mwc-bars">
@@ -1764,18 +1765,12 @@ const scrapByStock = computed(() => {
                     <div class="mwc-label">{{ week.label }}</div>
                   </div>
                 </div>
-              </div>
-
-              <!-- 부위 밸런스 -->
-              <div class="card mt16">
-                <div class="card-title">부위별 운동 횟수</div>
-                <div class="muscle-balance">
-                  <div v-for="(cnt, group) in muscleBalance" :key="group" class="muscle-row">
-                    <span class="muscle-name">{{ group }}</span>
-                    <div class="muscle-bar-wrap">
-                      <div class="muscle-bar" :style="{ width: (cnt / Math.max(...Object.values(muscleBalance), 1) * 100) + '%' }"></div>
-                    </div>
-                    <span class="muscle-cnt">{{ cnt }}회</span>
+                <!-- 부위별 총 횟수 -->
+                <div class="muscle-count-row">
+                  <div v-for="(cnt, g) in muscleBalance" :key="g" class="mc-item">
+                    <div class="mc-dot" :style="{background: MUSCLE_COLORS[g]}"></div>
+                    <div class="mc-name">{{ g }}</div>
+                    <div class="mc-cnt">{{ cnt }}회</div>
                   </div>
                 </div>
               </div>
@@ -2431,6 +2426,11 @@ const scrapByStock = computed(() => {
 .mwc-bars { display:flex; gap:1px; align-items:flex-end; height:80px; }
 .mwc-bar { width:6px; border-radius:2px 2px 0 0; transition:height 0.4s; min-height:0; }
 .mwc-label { font-size:10px; color:#888; }
+.muscle-count-row { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-top:14px; border-top:1px solid #eee; padding-top:12px; }
+.mc-item { display:flex; flex-direction:column; align-items:center; gap:3px; }
+.mc-dot { width:8px; height:8px; border-radius:50%; }
+.mc-name { font-size:10px; color:#888; }
+.mc-cnt { font-size:13px; font-weight:700; color:#1a1a3a; }
 .btn-gen-report { width:100%; background:#6c47ff; color:#fff; border:none; border-radius:10px; padding:10px; font-size:14px; cursor:pointer; margin-top:12px; }
 .btn-gen-report:disabled { opacity:0.6; cursor:default; }
 .past-reports { margin-top:14px; display:flex; flex-direction:column; gap:6px; }
