@@ -373,13 +373,35 @@ const login = async () => {
   if (error) { loginError.value = '이메일 또는 비밀번호가 틀렸습니다.'; return }
   isAuthorized.value = true
   await fetchAll()
+  startInactivityWatch()
 }
 
 const logout = async () => {
+  stopInactivityWatch()
   await supabase.auth.signOut()
   isAuthorized.value = false
   inputEmail.value = ''
   inputPassword.value = ''
+}
+
+// 비활성 자동 로그아웃 (1시간)
+let inactivityTimer = null
+const INACTIVITY_LIMIT = 60 * 60 * 1000
+const resetInactivityTimer = () => {
+  clearTimeout(inactivityTimer)
+  if (isAuthorized.value) {
+    inactivityTimer = setTimeout(() => { logout() }, INACTIVITY_LIMIT)
+  }
+}
+const startInactivityWatch = () => {
+  ['click','keydown','touchstart','scroll'].forEach(e =>
+    window.addEventListener(e, resetInactivityTimer, { passive: true }))
+  resetInactivityTimer()
+}
+const stopInactivityWatch = () => {
+  clearTimeout(inactivityTimer)
+  ;['click','keydown','touchstart','scroll'].forEach(e =>
+    window.removeEventListener(e, resetInactivityTimer))
 }
 
 // ── 데이터 불러오기
@@ -604,7 +626,7 @@ let channel
 onMounted(async () => {
   window.addEventListener('resize', onResize)
   const { data: { session } } = await supabase.auth.getSession()
-  if (session) { isAuthorized.value = true; await fetchAll() }
+  if (session) { isAuthorized.value = true; await fetchAll(); startInactivityWatch() }
   channel = supabase.channel('stock-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'stock_items' }, (p) => {
       if (p.eventType==='INSERT') { if (!stocks.value.find(s=>s.id===p.new.id)) stocks.value.push(p.new) }
@@ -616,6 +638,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   if (channel) supabase.removeChannel(channel)
   if (toastTimer) clearTimeout(toastTimer)
+  stopInactivityWatch()
 })
 
 // ── 계산
