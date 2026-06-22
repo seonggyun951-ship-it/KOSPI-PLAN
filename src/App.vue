@@ -758,6 +758,8 @@ const deleteWeight = async (id) => {
 }
 
 // ── 헬스 분석
+const selectedExercise = ref('')
+
 const muscleBalance = computed(() => {
   const map = {}
   MUSCLE_GROUPS.forEach(g => map[g] = 0)
@@ -779,6 +781,31 @@ const strengthByExercise = computed(() => {
   })
   return map
 })
+const weeklyVolume = computed(() => {
+  const weeks = []
+  for (let i = 7; i >= 0; i--) {
+    const start = new Date(Date.now() - (i + 1) * 7 * 86400000)
+    const end   = new Date(Date.now() - i * 7 * 86400000)
+    const label = `${start.getMonth()+1}/${start.getDate()}`
+    const cnt = workouts.value.filter(w => { const d = new Date(w.date); return d >= start && d < end }).length
+    weeks.push({ label, cnt })
+  }
+  return weeks
+})
+const exerciseProgress = computed(() => {
+  if (!selectedExercise.value) return []
+  const entries = (strengthByExercise.value[selectedExercise.value] || []).slice(-10)
+  return entries
+})
+const muscleImbalance = computed(() => {
+  const vals = Object.values(muscleBalance.value)
+  const maxVal = Math.max(...vals, 0)
+  if (maxVal === 0) return []
+  return Object.entries(muscleBalance.value)
+    .filter(([, cnt]) => cnt / maxVal < 0.3)
+    .map(([g]) => g)
+})
+const allExercises = computed(() => Object.keys(strengthByExercise.value).sort())
 
 // 스크랩 종목별 그룹
 const scrapByStock = computed(() => {
@@ -1244,6 +1271,11 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
+              <!-- 부위 불균형 경고 -->
+              <div v-if="muscleImbalance.length" class="alert-card mt16">
+                ⚠️ 상대적으로 부족한 부위: <strong>{{ muscleImbalance.join(', ') }}</strong>
+              </div>
+
               <!-- 부위 밸런스 -->
               <div class="card mt16">
                 <div class="card-title">부위별 운동 횟수</div>
@@ -1254,6 +1286,62 @@ const scrapByStock = computed(() => {
                       <div class="muscle-bar" :style="{ width: (cnt / Math.max(...Object.values(muscleBalance), 1) * 100) + '%' }"></div>
                     </div>
                     <span class="muscle-cnt">{{ cnt }}회</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 주간 운동량 -->
+              <div class="card mt16">
+                <div class="card-title">주간 운동량 (최근 8주)</div>
+                <div class="weekly-chart">
+                  <div v-for="w in weeklyVolume" :key="w.label" class="wc-col">
+                    <div class="wc-bar-wrap">
+                      <div class="wc-bar" :style="{ height: (w.cnt / Math.max(...weeklyVolume.map(x=>x.cnt), 1) * 100) + '%' }"></div>
+                    </div>
+                    <div class="wc-cnt">{{ w.cnt }}</div>
+                    <div class="wc-label">{{ w.label }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 체중 변화 그래프 -->
+              <div class="card mt16" v-if="recentWeights.length > 1">
+                <div class="card-title">체중 변화 (최근 {{ recentWeights.length }}회)</div>
+                <div class="weight-chart">
+                  <div v-for="(w, i) in recentWeights" :key="w.id" class="wt-col">
+                    <div class="wt-bar-wrap">
+                      <div class="wt-bar" :style="{
+                        height: ((w.weight - Math.min(...recentWeights.map(x=>x.weight))) /
+                          Math.max(Math.max(...recentWeights.map(x=>x.weight)) - Math.min(...recentWeights.map(x=>x.weight)), 0.1) * 70 + 10) + '%'
+                      }" :class="i > 0 && w.weight < recentWeights[i-1].weight ? 'wt-down' : 'wt-up'"></div>
+                    </div>
+                    <div class="wt-val">{{ w.weight }}</div>
+                    <div class="wt-date">{{ w.date.slice(5) }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 종목별 발전 추이 -->
+              <div class="card mt16">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                  <div class="card-title" style="margin:0">종목별 무게 추이</div>
+                  <select v-model="selectedExercise" class="input-field" style="width:auto;min-width:140px;font-size:13px">
+                    <option value="">운동 선택</option>
+                    <option v-for="ex in allExercises" :key="ex">{{ ex }}</option>
+                  </select>
+                </div>
+                <div v-if="!selectedExercise" class="empty-td" style="padding:16px;text-align:center">위에서 운동을 선택하세요</div>
+                <div v-else-if="!exerciseProgress.length" class="empty-td" style="padding:16px;text-align:center">기록 없음</div>
+                <div v-else class="ex-chart">
+                  <div v-for="(e, i) in exerciseProgress" :key="i" class="ex-col">
+                    <div class="ex-bar-wrap">
+                      <div class="ex-bar" :style="{
+                        height: ((e.weight - Math.min(...exerciseProgress.map(x=>x.weight))) /
+                          Math.max(Math.max(...exerciseProgress.map(x=>x.weight)) - Math.min(...exerciseProgress.map(x=>x.weight)), 0.1) * 70 + 10) + '%'
+                      }"></div>
+                    </div>
+                    <div class="ex-val">{{ e.weight }}kg</div>
+                    <div class="ex-date">{{ e.date.slice(5) }}</div>
                   </div>
                 </div>
               </div>
@@ -1685,6 +1773,28 @@ const scrapByStock = computed(() => {
 .muscle-bar-wrap { background:#2a2a45; border-radius:4px; height:10px; overflow:hidden; }
 .muscle-bar { background:#6c47ff; height:100%; border-radius:4px; transition:width 0.4s; }
 .muscle-cnt { color:#c0c0e0; text-align:right; font-size:12px; }
+
+.alert-card { background:#3a1a1a; border:1px solid #ef4444; border-radius:10px; padding:12px 16px; color:#fca5a5; font-size:13px; }
+.weekly-chart { display:flex; gap:6px; align-items:flex-end; height:100px; padding-top:8px; }
+.wc-col { display:flex; flex-direction:column; align-items:center; flex:1; gap:2px; }
+.wc-bar-wrap { width:100%; flex:1; display:flex; align-items:flex-end; }
+.wc-bar { width:100%; background:#6c47ff; border-radius:4px 4px 0 0; transition:height 0.4s; min-height:4px; }
+.wc-cnt { font-size:11px; color:#c0c0e0; }
+.wc-label { font-size:10px; color:#888; }
+.weight-chart { display:flex; gap:4px; align-items:flex-end; height:100px; padding-top:8px; overflow-x:auto; }
+.wt-col { display:flex; flex-direction:column; align-items:center; flex:0 0 auto; min-width:36px; gap:2px; }
+.wt-bar-wrap { width:20px; height:70px; display:flex; align-items:flex-end; }
+.wt-bar { width:100%; border-radius:4px 4px 0 0; transition:height 0.4s; min-height:4px; }
+.wt-up { background:#22c55e; }
+.wt-down { background:#3b82f6; }
+.wt-val { font-size:11px; color:#c0c0e0; }
+.wt-date { font-size:10px; color:#888; }
+.ex-chart { display:flex; gap:4px; align-items:flex-end; height:110px; padding-top:8px; overflow-x:auto; }
+.ex-col { display:flex; flex-direction:column; align-items:center; flex:0 0 auto; min-width:48px; gap:2px; }
+.ex-bar-wrap { width:28px; height:70px; display:flex; align-items:flex-end; }
+.ex-bar { width:100%; background:#f59e0b; border-radius:4px 4px 0 0; transition:height 0.4s; min-height:4px; }
+.ex-val { font-size:11px; color:#c0c0e0; }
+.ex-date { font-size:10px; color:#888; }
 
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
 .modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow:visible; }
