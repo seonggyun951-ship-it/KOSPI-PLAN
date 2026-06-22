@@ -1745,6 +1745,43 @@ const scrapByStock = computed(() => {
                 ⚠️ 상대적으로 부족한 부위: <strong>{{ muscleImbalance.join(', ') }}</strong>
               </div>
 
+              <!-- 운동 기록 -->
+              <div class="card mt16">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                  <div class="card-title" style="margin:0">운동 기록</div>
+                  <div style="display:flex;gap:6px">
+                    <button @click="showBatchWorkout=true;batchDate=new Date().toISOString().slice(0,10);batchItems=[]" class="btn-add-top">날짜별 입력</button>
+                    <button @click="showAddWorkout=true" class="btn-add-top">+ 1개</button>
+                  </div>
+                </div>
+                <div class="workout-log-list">
+                  <div v-for="w in workouts.slice(0,30)" :key="w.id" class="wl-item">
+                    <div class="wl-header">
+                      <div class="wl-left">
+                        <span class="wl-date">{{ w.date }}</span>
+                        <span v-if="w.set_type==='superset'" class="tag-superset">슈퍼세트</span>
+                        <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
+                        <span class="wl-group">{{ w.muscle_group }}</span>
+                      </div>
+                      <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
+                    </div>
+                    <div class="wl-name">{{ w.exercise }}</div>
+                    <div class="wl-sets">
+                      <template v-if="w.set_logs?.length">
+                        <span v-for="(s, si) in w.set_logs" :key="si"
+                          :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
+                          {{ si+1 }}. {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
+                        </span>
+                      </template>
+                      <template v-else>
+                        <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
+                      </template>
+                    </div>
+                  </div>
+                  <div v-if="!workouts.length" class="empty-td" style="padding:16px;text-align:center">운동을 기록해보세요</div>
+                </div>
+              </div>
+
               <!-- 부위별 주간 볼륨 + 총 횟수 -->
               <div class="card mt16">
                 <div class="card-title">부위별 운동량</div>
@@ -1852,42 +1889,6 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
-              <!-- 운동 기록 -->
-              <div class="card mt16">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                  <div class="card-title" style="margin:0">운동 기록</div>
-                  <div style="display:flex;gap:6px">
-                    <button @click="showBatchWorkout=true;batchDate=new Date().toISOString().slice(0,10);batchItems=[]" class="btn-add-top">날짜별 입력</button>
-                    <button @click="showAddWorkout=true" class="btn-add-top">+ 1개</button>
-                  </div>
-                </div>
-                <div class="workout-log-list">
-                  <div v-for="w in workouts.slice(0,30)" :key="w.id" class="wl-item">
-                    <div class="wl-header">
-                      <div class="wl-left">
-                        <span class="wl-date">{{ w.date }}</span>
-                        <span v-if="w.set_type==='superset'" class="tag-superset">슈퍼세트</span>
-                        <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
-                        <span class="wl-group">{{ w.muscle_group }}</span>
-                      </div>
-                      <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
-                    </div>
-                    <div class="wl-name">{{ w.exercise }}</div>
-                    <div class="wl-sets">
-                      <template v-if="w.set_logs?.length">
-                        <span v-for="(s, si) in w.set_logs" :key="si"
-                          :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
-                          {{ si+1 }}. {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
-                        </span>
-                      </template>
-                      <template v-else>
-                        <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
-                      </template>
-                    </div>
-                  </div>
-                  <div v-if="!workouts.length" class="empty-td" style="padding:16px;text-align:center">운동을 기록해보세요</div>
-                </div>
-              </div>
             </template>
 
           </div>
