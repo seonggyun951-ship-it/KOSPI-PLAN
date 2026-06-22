@@ -190,8 +190,27 @@ const weightLogs      = ref([])
 const reports         = ref([])
 const showAddWorkout  = ref(false)
 const showAddWeight   = ref(false)
-const selectedReport  = ref(null)
+const selectedReport   = ref(null)
 const reportGenerating = ref(false)
+const showPasteReport  = ref(false)
+const pasteForm = ref({ type:'weekly', period_label:'', content:'' })
+
+const savePastedReport = async () => {
+  if (!pasteForm.value.content.trim() || !pasteForm.value.period_label.trim()) return
+  const now = new Date()
+  const { data, error } = await supabase.from('reports').insert({
+    type: pasteForm.value.type,
+    period_label: pasteForm.value.period_label,
+    period_start: now.toISOString().slice(0,10),
+    content: pasteForm.value.content.trim()
+  }).select().single()
+  if (!error && data) {
+    reports.value.unshift(data)
+    selectedReport.value = data
+    showPasteReport.value = false
+    pasteForm.value = { type:'weekly', period_label:'', content:'' }
+  }
+}
 const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' })
 const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
 
@@ -1671,10 +1690,15 @@ const scrapByStock = computed(() => {
                     </div>
                   </template>
 
-                  <!-- 보고서 생성 버튼 -->
-                  <button @click="generateReport(reportTab)" class="btn-gen-report" :disabled="reportGenerating">
-                    {{ reportGenerating ? '생성 중...' : '📄 이번 ' + (reportTab==='weekly' ? '주' : '달') + ' 보고서 생성' }}
-                  </button>
+                  <!-- 보고서 버튼들 -->
+                  <div style="display:flex;gap:8px;margin-top:12px">
+                    <button @click="generateReport(reportTab)" class="btn-gen-report" style="flex:1" :disabled="reportGenerating">
+                      {{ reportGenerating ? '생성 중...' : '📄 자동 생성 (API)' }}
+                    </button>
+                    <button @click="showPasteReport=true;pasteForm.type=reportTab" class="btn-paste-report">
+                      ✏️ 직접 입력
+                    </button>
+                  </div>
 
                   <!-- 과거 보고서 목록 -->
                   <div v-if="reports.filter(r=>r.type===reportTab).length" class="past-reports">
@@ -1974,6 +1998,39 @@ const scrapByStock = computed(() => {
             <button @click="saveBatchWorkout" class="btn-primary" :disabled="!batchItems.length || batchSaving">
               {{ batchSaving ? '저장 중...' : `전체 저장 (${batchItems.length}개)` }}
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 보고서 직접 입력 모달 -->
+      <div v-if="showPasteReport" class="modal-overlay" @click.self="showPasteReport=false">
+        <div class="modal">
+          <h3>보고서 직접 입력</h3>
+          <p style="font-size:13px;color:#888;margin-bottom:14px">
+            📋 데이터 복사 → Claude.ai에 붙여넣기 → 받은 보고서를 여기에 저장
+          </p>
+          <div class="form-row">
+            <div class="form-group">
+              <label>종류</label>
+              <select v-model="pasteForm.type" class="input-field">
+                <option value="weekly">주간</option>
+                <option value="monthly">월간</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>기간 이름</label>
+              <input v-model="pasteForm.period_label" class="input-field" placeholder="예: 2026년 6월 4주차" />
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:8px">
+            <label>보고서 내용 붙여넣기</label>
+            <textarea v-model="pasteForm.content" class="input-field paste-textarea"
+              placeholder="Claude.ai에서 받은 보고서 내용을 여기에 붙여넣으세요"></textarea>
+          </div>
+          <div class="modal-btns" style="margin-top:14px">
+            <button @click="showPasteReport=false" class="btn-cancel">취소</button>
+            <button @click="savePastedReport" class="btn-primary"
+              :disabled="!pasteForm.content.trim() || !pasteForm.period_label.trim()">저장</button>
           </div>
         </div>
       </div>
@@ -2358,6 +2415,8 @@ const scrapByStock = computed(() => {
 .report-missing { font-size:12px; color:#f59e0b; margin-bottom:8px; }
 .report-comment-area { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
 .report-comment { background:#f0f0fa; border-radius:10px; padding:12px 14px; font-size:13px; color:#333; line-height:1.6; border-left:3px solid #6c47ff; }
+.btn-paste-report { background:#f0f0fa; color:#6c47ff; border:1px solid #6c47ff; border-radius:10px; padding:10px 16px; font-size:13px; cursor:pointer; white-space:nowrap; }
+.paste-textarea { width:100%; min-height:200px; resize:vertical; font-size:13px; line-height:1.6; }
 .btn-copy-data { background:#22c55e; color:#fff; border:none; border-radius:20px; padding:6px 14px; font-size:13px; cursor:pointer; }
 .profile-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
 .muscle-legend { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
