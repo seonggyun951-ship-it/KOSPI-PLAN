@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -198,6 +198,13 @@ const selectedReport   = ref(null)
 const reportGenerating = ref(false)
 const showPasteReport  = ref(false)
 const pasteForm = ref({ type:'weekly', period_label:'', content:'' })
+const deleteReport = async (id) => {
+  const { error } = await supabase.from('reports').delete().eq('id', id)
+  if (!error) {
+    reports.value = reports.value.filter(r => r.id !== id)
+    if (selectedReport.value?.id === id) selectedReport.value = null
+  }
+}
 
 const savePastedReport = async () => {
   if (!pasteForm.value.content.trim() || !pasteForm.value.period_label.trim()) return
@@ -215,7 +222,7 @@ const savePastedReport = async () => {
     pasteForm.value = { type:'weekly', period_label:'', content:'' }
   }
 }
-const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' })
+const newWorkout = ref({ date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'', duration_min: null })
 const newWeight  = ref({ date: new Date().toISOString().slice(0,10), weight:'' })
 
 // 날짜별 일괄 입력
@@ -224,6 +231,7 @@ const batchDate         = ref(new Date().toISOString().slice(0,10))
 const batchItems        = ref([])
 const batchSaving       = ref(false)
 const batchMemo         = ref('')
+const batchDuration     = ref(null)
 const supersetMode      = ref(false)
 const supersetGroupId   = ref(null)
 
@@ -835,7 +843,7 @@ const removeBatchItem = (i) => { batchItems.value.splice(i, 1) }
 const saveBatchWorkout = async () => {
   if (!batchItems.value.length) return
   batchSaving.value = true
-  const rows = batchItems.value.map(item => ({ ...item, date: batchDate.value, memo: '' }))
+  const rows = batchItems.value.map(item => ({ ...item, date: batchDate.value, memo: '', duration_min: batchDuration.value ? parseInt(batchDuration.value) : null }))
   const { data, error } = await supabase.from('workouts').insert(rows).select()
   if (!error && data) {
     data.forEach(w => workouts.value.unshift(w))
@@ -853,6 +861,7 @@ const saveBatchWorkout = async () => {
     }
     batchItems.value = []
     batchMemo.value = ''
+    batchDuration.value = null
     batchDate.value = new Date().toISOString().slice(0,10)
     supersetMode.value = false
     supersetGroupId.value = null
@@ -871,13 +880,31 @@ const addWorkout = async () => {
   const { data, error } = await supabase.from('workouts').insert(payload).select().single()
   if (!error && data) {
     workouts.value.unshift(data)
-    newWorkout.value = { date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'' }
+    newWorkout.value = { date: new Date().toISOString().slice(0,10), exercise:'', muscle_group:'가슴', sets:3, reps:10, weight:0, memo:'', duration_min: null }
     showAddWorkout.value = false
   }
 }
 const deleteWorkout = async (id) => {
   const { error } = await supabase.from('workouts').delete().eq('id', id)
   if (!error) workouts.value = workouts.value.filter(w => w.id !== id)
+}
+
+const showEditWorkout = ref(false)
+const editingWorkout  = ref(null)
+const openEditWorkout = (w) => {
+  editingWorkout.value = { ...w, exercise: w.exercise || '', duration_min: w.duration_min || null }
+  showEditWorkout.value = true
+}
+const saveEditWorkout = async () => {
+  if (!editingWorkout.value) return
+  const { id, ...payload } = editingWorkout.value
+  const { data, error } = await supabase.from('workouts').update(payload).eq('id', id).select().single()
+  if (!error && data) {
+    const idx = workouts.value.findIndex(w => w.id === id)
+    if (idx >= 0) workouts.value.splice(idx, 1, data)
+    showEditWorkout.value = false
+    editingWorkout.value = null
+  }
 }
 const addWeight = async () => {
   if (!newWeight.value.weight) return
@@ -993,13 +1020,35 @@ const copyWorkoutData = () => {
   alert('클립보드에 복사됐어요! Claude.ai에 붙여넣기 하세요.')
 }
 
+// 종목별 개인 최고 기록 (부위별 그룹)
+const allTimePRs = computed(() => {
+  const map = {}
+  workouts.value.forEach(w => {
+    if (!w.exercise) return
+    const actualWeight = w.set_logs?.length
+      ? Math.max(...w.set_logs.map(s => s.weight || 0))
+      : (w.weight || 0)
+    const oneRM = calcOneRM(w)
+    if (!map[w.exercise]) map[w.exercise] = { exercise: w.exercise, muscle_group: w.muscle_group, bestWeight: 0, bestOneRM: 0 }
+    if (actualWeight > map[w.exercise].bestWeight) map[w.exercise].bestWeight = actualWeight
+    if (oneRM > map[w.exercise].bestOneRM) map[w.exercise].bestOneRM = oneRM
+  })
+  const byGroup = {}
+  Object.values(map).forEach(p => {
+    if (!byGroup[p.muscle_group]) byGroup[p.muscle_group] = []
+    byGroup[p.muscle_group].push(p)
+  })
+  return MUSCLE_GROUPS.filter(g => byGroup[g]).map(g => ({ group: g, items: byGroup[g].sort((a,b) => b.bestOneRM - a.bestOneRM) }))
+})
+
 // 부위별 주간 볼륨 차트 (최근 6주)
 const weeklyMuscleChart = computed(() => {
   const weeks = []
   for (let i = 5; i >= 0; i--) {
     const start = new Date(Date.now() - (i+1)*7*86400000)
     const end   = new Date(Date.now() - i*7*86400000)
-    const label = `${start.getMonth()+1}/${start.getDate()}`
+    const endLabel = new Date(end.getTime() - 86400000)
+    const label = `${start.getMonth()+1}/${start.getDate()}~${endLabel.getMonth()+1}/${endLabel.getDate()}`
     const weekData = {}
     MUSCLE_GROUPS.forEach(g => weekData[g] = 0)
     workouts.value
@@ -1062,7 +1111,8 @@ const weeklyReport = computed(() => {
   const startW = lwWeights.length ? lwWeights[lwWeights.length-1].weight : wWeights[0]?.weight ?? null
   const endW   = wWeights.length  ? wWeights[wWeights.length-1].weight  : null
 
-  const label = `${thisMonday.getMonth()+1}/${thisMonday.getDate()} ~ ${now.getMonth()+1}/${now.getDate()}`
+  const thisSunday = new Date(thisMonday); thisSunday.setDate(thisMonday.getDate() + 6)
+  const label = `${thisMonday.getMonth()+1}/${thisMonday.getDate()} ~ ${thisSunday.getMonth()+1}/${thisSunday.getDate()}`
   return { label, thisDays, lastDays, thisVolume, lastVolume, topGroup: topGroup?.[0], topGroupCnt: topGroup?.[1]||0, missingGroups, prs, startW, endW }
 })
 
@@ -1175,6 +1225,119 @@ const strengthByExercise = computed(() => {
   })
   return map
 })
+const workoutsByDate = computed(() => {
+  const map = {}
+  workouts.value.forEach(w => {
+    if (!map[w.date]) map[w.date] = []
+    map[w.date].push(w)
+  })
+  return Object.keys(map).sort().reverse().slice(0, 30).map(date => ({ date, items: map[date] }))
+})
+
+// PR 그룹 아코디언
+const expandedPRGroups = ref([])
+const togglePRGroup = (group) => {
+  const idx = expandedPRGroups.value.indexOf(group)
+  if (idx >= 0) expandedPRGroups.value.splice(idx, 1)
+  else expandedPRGroups.value.push(group)
+}
+const isPRGroupExpanded = (group) => expandedPRGroups.value.includes(group)
+
+// PR 내 무게 추이
+const selectedPRExercise = ref(null)
+const togglePRExercise = (ex) => { selectedPRExercise.value = selectedPRExercise.value === ex ? null : ex }
+const prExerciseChart = computed(() => {
+  if (!selectedPRExercise.value) return []
+  return (strengthByExercise.value[selectedPRExercise.value] || []).slice(-10)
+})
+
+// 날짜 아코디언
+const expandedDates = ref([])
+const toggleDate = (date) => {
+  const idx = expandedDates.value.indexOf(date)
+  if (idx >= 0) expandedDates.value.splice(idx, 1)
+  else expandedDates.value.push(date)
+}
+const isExpanded = (date) => expandedDates.value.includes(date)
+watch(workoutsByDate, (groups) => {
+  if (groups.length && !expandedDates.value.length) {
+    expandedDates.value = [groups[0].date]
+  }
+}, { immediate: true })
+
+// 주간 데이터 복사
+const showCopyPicker = ref(false)
+const availableCopyWeeks = computed(() => {
+  const now = new Date()
+  const dow = now.getDay()
+  const thisMonday = new Date(now)
+  thisMonday.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1))
+  thisMonday.setHours(0,0,0,0)
+  const weeks = []
+  for (let i = 0; i < 8; i++) {
+    const monday = new Date(thisMonday); monday.setDate(thisMonday.getDate() - i * 7)
+    const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+    const startStr = monday.toISOString().slice(0,10)
+    const endStr = sunday.toISOString().slice(0,10)
+    const hasData = workouts.value.some(w => w.date >= startStr && w.date <= endStr)
+    if (hasData) weeks.push({ label: `${monday.getMonth()+1}/${monday.getDate()}(월) ~ ${sunday.getMonth()+1}/${sunday.getDate()}(일)`, startStr, endStr })
+  }
+  return weeks
+})
+const copyWeekData = (startStr, endStr) => {
+  showCopyPicker.value = false
+  const p = profile.value
+  const latestWeight = weightLogs.value.at(-1)?.weight
+  const lines = ['=== 헬스 데이터 ===\n']
+  if (p.height || p.age) {
+    lines.push('[프로필]')
+    if (p.gender) lines.push(`성별: ${p.gender}`)
+    if (p.age)    lines.push(`나이: ${p.age}세`)
+    if (p.height) lines.push(`키: ${p.height}cm`)
+    if (latestWeight) lines.push(`현재 체중: ${latestWeight}kg`)
+    if (p.height && latestWeight) lines.push(`BMI: ${(latestWeight/((p.height/100)**2)).toFixed(1)}`)
+    if (p.goal)   lines.push(`목표: ${p.goal}`)
+    lines.push('')
+  }
+  const weekWorkouts = workouts.value.filter(w => w.date >= startStr && w.date <= endStr)
+  lines.push(`=== 운동 기록 (${startStr} ~ ${endStr}) ===\n`)
+  const byDate = {}
+  weekWorkouts.forEach(w => { if (!byDate[w.date]) byDate[w.date] = []; byDate[w.date].push(w) })
+  Object.keys(byDate).sort().reverse().forEach(date => {
+    lines.push(`[${date}]`)
+    byDate[date].forEach(w => {
+      lines.push(`• ${w.exercise} (${w.muscle_group})`)
+      if (w.set_logs?.length) {
+        w.set_logs.forEach((s,i) => {
+          const tag = s.type==='failure' ? ' (실패)' : s.type==='dropset' ? ' (드롭)' : ''
+          lines.push(`  Set ${i+1}: ${s.weight}kg × ${s.reps}회${tag}`)
+        })
+      } else {
+        lines.push(`  ${w.sets}세트 × ${w.reps}회 / ${w.weight}kg`)
+      }
+    })
+    lines.push('')
+  })
+  const weekWeights = weightLogs.value.filter(w => w.date >= startStr && w.date <= endStr)
+  if (weekWeights.length) {
+    lines.push('[체중 기록]')
+    weekWeights.forEach(w => lines.push(`${w.date}: ${w.weight}kg`))
+    lines.push('')
+  }
+  const weekMemos = workoutMemos.value.filter(m => m.date >= startStr && m.date <= endStr)
+  if (weekMemos.length) {
+    lines.push('[운동 일지]')
+    weekMemos.forEach(m => lines.push(`${m.date}: ${m.content}`))
+    lines.push('')
+  }
+  lines.push('[집계]')
+  lines.push(`운동 일수: ${new Set(weekWorkouts.map(w=>w.date)).size}일`)
+  lines.push(`총 볼륨: ${weekWorkouts.reduce((s,w)=>s+calcVolume(w),0).toLocaleString('ko-KR')}kg`)
+  MUSCLE_GROUPS.forEach(g => { const cnt = weekWorkouts.filter(w=>w.muscle_group===g).length; if(cnt) lines.push(`${g}: ${cnt}회`) })
+  navigator.clipboard.writeText(lines.join('\n'))
+  alert('클립보드에 복사됐어요! Claude.ai에 붙여넣기 하세요.')
+}
+
 const weeklyVolume = computed(() => {
   const weeks = []
   for (let i = 7; i >= 0; i--) {
@@ -1650,7 +1813,7 @@ const scrapByStock = computed(() => {
               <div class="card">
                 <div class="report-header">
                   <div class="card-title" style="margin:0">내 프로필</div>
-                  <button @click="copyWorkoutData" class="btn-copy-data">📋 데이터 복사</button>
+                  <button @click="showCopyPicker=true" class="btn-copy-data">📋 데이터 복사</button>
                 </div>
                 <div class="profile-grid">
                   <div class="form-group">
@@ -1695,6 +1858,7 @@ const scrapByStock = computed(() => {
                   <div class="report-viewer-header">
                     <button @click="selectedReport=null" class="btn-back-report">← 목록</button>
                     <span class="rv-label">{{ selectedReport.period_label }}</span>
+                    <button @click="deleteReport(selectedReport.id)" class="btn-sm del">삭제</button>
                   </div>
                   <div class="report-viewer-body">{{ selectedReport.content }}</div>
                 </template>
@@ -1729,9 +1893,6 @@ const scrapByStock = computed(() => {
                         <div class="rg-val">{{ weeklyReport.endW ? weeklyReport.endW+'kg' : '-' }}</div>
                         <div class="rg-label">현재 체중</div>
                       </div>
-                    </div>
-                    <div v-if="weeklyReport.prs.length" class="report-prs">
-                      <span v-for="p in weeklyReport.prs" :key="p.exercise" class="pr-badge">🏅 {{ p.exercise }} {{ p.oneRM }}kg</span>
                     </div>
                   </template>
                   <template v-else>
@@ -1784,7 +1945,10 @@ const scrapByStock = computed(() => {
                       class="past-report-item" @click="selectedReport=r">
                       <div class="pri-label">{{ r.period_label }}</div>
                       <div class="pri-date">{{ r.created_at?.slice(0,10) }}</div>
-                      <span class="pri-arrow">›</span>
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <button @click.stop="deleteReport(r.id)" class="btn-sm del">삭제</button>
+                        <span class="pri-arrow">›</span>
+                      </div>
                     </div>
                   </div>
                   <div v-else class="empty-td" style="padding:12px;text-align:center;font-size:13px">
@@ -1794,10 +1958,10 @@ const scrapByStock = computed(() => {
               </div>
 
               <!-- 요약 카드 -->
-              <div class="summary-grid">
+              <div class="summary-grid health-summary-grid">
                 <div class="summary-card total">
                   <div class="sc-label">총 운동 기록</div>
-                  <div class="sc-value sm">{{ workouts.length }}회</div>
+                  <div class="sc-value sm">{{ new Set(workouts.map(w=>w.date)).size }}회</div>
                 </div>
                 <div class="summary-card long-card">
                   <div class="sc-label">최근 체중</div>
@@ -1808,8 +1972,8 @@ const scrapByStock = computed(() => {
                   <div class="sc-value sm" style="font-size:16px">{{ weightPlateau ? '⚠️ 정체기' : '✅ 변화중' }}</div>
                 </div>
                 <div class="summary-card short-card">
-                  <div class="sc-label">이번 주 운동</div>
-                  <div class="sc-value sm">{{ workouts.filter(w => new Date(w.date) >= new Date(Date.now()-7*86400000)).length }}회</div>
+                  <div class="sc-label">{{ reportTab==='weekly' ? '이번 주 운동' : '이번 달 운동' }}</div>
+                  <div class="sc-value sm">{{ reportTab==='weekly' ? weeklyReport.thisDays : monthlyReport.thisDays }}회</div>
                 </div>
               </div>
 
@@ -1828,42 +1992,44 @@ const scrapByStock = computed(() => {
                   </div>
                 </div>
                 <div class="workout-log-list">
-                  <div v-for="w in workouts.slice(0,30)" :key="w.id" class="wl-item">
-                    <div class="wl-header">
-                      <div class="wl-left">
-                        <span class="wl-date">{{ w.date }}</span>
-                        <span v-if="w.set_type==='superset'" class="tag-superset">슈퍼세트</span>
-                        <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
-                        <span class="wl-group">{{ w.muscle_group }}</span>
+                  <div v-for="group in workoutsByDate" :key="group.date" class="wl-date-group">
+                    <div class="wl-date-header" @click="toggleDate(group.date)">
+                      <span>{{ group.date }}</span>
+                      <span class="wl-date-meta">
+                        {{ group.items.length }}개
+                        <template v-if="group.items.find(w=>w.duration_min)">· {{ group.items.find(w=>w.duration_min).duration_min }}분</template>
+                        · {{ isExpanded(group.date) ? '▲' : '▼' }}
+                      </span>
+                    </div>
+                    <template v-if="isExpanded(group.date)">
+                      <div v-for="w in group.items" :key="w.id" class="wl-item">
+                        <div class="wl-header">
+                          <div class="wl-left">
+                            <span v-if="w.set_type==='superset'" class="tag-superset">슈퍼세트</span>
+                            <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
+                            <span class="wl-group">{{ w.muscle_group }}</span>
+                          </div>
+                          <div style="display:flex;gap:4px">
+                            <button @click="openEditWorkout(w)" class="btn-sm">수정</button>
+                            <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
+                          </div>
+                        </div>
+                        <div class="wl-name">{{ w.exercise }}</div>
+                        <div class="wl-sets">
+                          <template v-if="w.set_logs?.length">
+                            <span v-for="(s, si) in w.set_logs" :key="si"
+                              :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
+                              {{ si+1 }}. {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
+                            </span>
+                          </template>
+                          <template v-else>
+                            <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
+                          </template>
+                        </div>
                       </div>
-                      <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
-                    </div>
-                    <div class="wl-name">{{ w.exercise }}</div>
-                    <div class="wl-sets">
-                      <template v-if="w.set_logs?.length">
-                        <span v-for="(s, si) in w.set_logs" :key="si"
-                          :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
-                          {{ si+1 }}. {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
-                        </span>
-                      </template>
-                      <template v-else>
-                        <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
-                      </template>
-                    </div>
+                    </template>
                   </div>
                   <div v-if="!workouts.length" class="empty-td" style="padding:16px;text-align:center">운동을 기록해보세요</div>
-                </div>
-              </div>
-
-              <!-- 운동 일지 -->
-              <div class="card mt16" v-if="workoutMemos.length">
-                <div class="card-title">운동 일지</div>
-                <div class="memo-list">
-                  <div v-for="m in workoutMemos.slice(0,10)" :key="m.id" class="memo-item">
-                    <div class="memo-date">{{ m.date }}</div>
-                    <div class="memo-content">{{ m.content }}</div>
-                    <button @click="deleteMemo(m.id)" class="btn-sm del">삭제</button>
-                  </div>
                 </div>
               </div>
 
@@ -1897,6 +2063,31 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
+              <!-- 종목별 개인 최고 기록 -->
+              <div class="card mt16" v-if="allTimePRs.length">
+                <div class="card-title">부위별 개인 최고 기록</div>
+                <div v-for="group in allTimePRs" :key="group.group" class="pr-group">
+                  <div class="pr-group-label" @click="togglePRGroup(group.group)">
+                    <span class="pr-dot" :style="{background: MUSCLE_COLORS[group.group]}"></span>
+                    <span :style="{color: MUSCLE_COLORS[group.group]}">{{ group.group }}</span>
+                    <span class="pr-group-cnt">{{ group.items.length }}개</span>
+                    <span class="pr-toggle">{{ isPRGroupExpanded(group.group) ? '▲' : '▼' }}</span>
+                  </div>
+                  <div v-if="isPRGroupExpanded(group.group)" class="pr-table">
+                    <div class="pr-row pr-head">
+                      <span class="pr-ex">종목</span>
+                      <span class="pr-val">실제 최고</span>
+                      <span class="pr-val">1RM 환산</span>
+                    </div>
+                    <div v-for="p in group.items" :key="p.exercise" class="pr-row">
+                      <span class="pr-ex">{{ p.exercise }}</span>
+                      <span class="pr-val">{{ p.bestWeight }}kg</span>
+                      <span class="pr-val pr-orm">{{ p.bestOneRM }}kg</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- 주간 운동량 -->
               <div class="card mt16">
                 <div class="card-title">주간 운동량 (최근 8주)</div>
@@ -1911,10 +2102,18 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
-              <!-- 체중 변화 그래프 -->
-              <div class="card mt16" v-if="recentWeights.length > 1">
-                <div class="card-title">체중 변화 (최근 {{ recentWeights.length }}회)</div>
-                <div class="weight-chart">
+              <!-- 체중 기록 + 그래프 -->
+              <div class="card mt16">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                  <div class="card-title" style="margin:0">체중 변화</div>
+                  <button @click="showAddWeight=true" class="btn-add-top">+ 체중 추가</button>
+                </div>
+                <div v-if="!weightLogs.length" class="empty-td" style="padding:16px;text-align:center">체중을 기록해보세요</div>
+                <div v-else-if="recentWeights.length === 1" style="text-align:center;padding:12px;font-size:15px;font-weight:700">
+                  {{ recentWeights[0].weight }}kg
+                  <div style="font-size:12px;color:#aaa;margin-top:4px">{{ recentWeights[0].date }}</div>
+                </div>
+                <div v-else class="weight-chart">
                   <div v-for="(w, i) in recentWeights" :key="w.id" class="wt-col">
                     <div class="wt-bar-wrap">
                       <div class="wt-bar" :style="{
@@ -1928,54 +2127,36 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
-              <!-- 종목별 발전 추이 -->
-              <div class="card mt16">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-                  <div class="card-title" style="margin:0">종목별 무게 추이</div>
-                  <select v-model="selectedExercise" class="input-field" style="width:auto;min-width:140px;font-size:13px">
-                    <option value="">운동 선택</option>
-                    <option v-for="ex in allExercises" :key="ex">{{ ex }}</option>
-                  </select>
-                </div>
-                <div v-if="!selectedExercise" class="empty-td" style="padding:16px;text-align:center">위에서 운동을 선택하세요</div>
-                <div v-else-if="!exerciseProgress.length" class="empty-td" style="padding:16px;text-align:center">기록 없음</div>
-                <div v-else class="ex-chart">
-                  <div v-for="(e, i) in exerciseProgress" :key="i" class="ex-col">
-                    <div class="ex-bar-wrap">
-                      <div class="ex-bar" :style="{
-                        height: ((e.weight - Math.min(...exerciseProgress.map(x=>x.weight))) /
-                          Math.max(Math.max(...exerciseProgress.map(x=>x.weight)) - Math.min(...exerciseProgress.map(x=>x.weight)), 0.1) * 70 + 10) + '%'
-                      }"></div>
-                    </div>
-                    <div class="ex-val">{{ e.weight }}kg</div>
-                    <div class="ex-date">{{ e.date.slice(5) }}</div>
+              <!-- 운동 일지 -->
+              <div class="card mt16" v-if="workoutMemos.length">
+                <div class="card-title">운동 일지</div>
+                <div class="memo-list">
+                  <div v-for="m in workoutMemos.slice(0,10)" :key="m.id" class="memo-item">
+                    <div class="memo-date">{{ m.date }}</div>
+                    <div class="memo-content">{{ m.content }}</div>
+                    <button @click="deleteMemo(m.id)" class="btn-sm del">삭제</button>
                   </div>
-                </div>
-              </div>
-
-              <!-- 체중 기록 -->
-              <div class="card mt16">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                  <div class="card-title" style="margin:0">체중 기록</div>
-                  <button @click="showAddWeight=true" class="btn-add-top">+ 체중 추가</button>
-                </div>
-                <div class="table-wrap">
-                  <table class="stock-table">
-                    <thead><tr><th>날짜</th><th>체중 (kg)</th><th></th></tr></thead>
-                    <tbody>
-                      <tr v-for="w in [...weightLogs].reverse().slice(0,10)" :key="w.id">
-                        <td>{{ w.date }}</td>
-                        <td>{{ w.weight }}kg</td>
-                        <td><button @click="deleteWeight(w.id)" class="btn-sm del">삭제</button></td>
-                      </tr>
-                      <tr v-if="!weightLogs.length"><td colspan="3" class="empty-td">체중을 기록해보세요</td></tr>
-                    </tbody>
-                  </table>
                 </div>
               </div>
 
             </template>
 
+          </div>
+        </div>
+      </div>
+
+      <!-- 주간 데이터 복사 모달 -->
+      <div v-if="showCopyPicker" class="modal-overlay" @click.self="showCopyPicker=false">
+        <div class="modal">
+          <div class="modal-handle"></div>
+          <h3>주간 데이터 복사</h3>
+          <p style="font-size:13px;color:#888;margin-bottom:16px">복사할 주를 선택하세요</p>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <button v-for="w in availableCopyWeeks" :key="w.startStr"
+              class="week-pick-btn" @click="copyWeekData(w.startStr, w.endStr)">
+              {{ w.label }}
+            </button>
+            <div v-if="!availableCopyWeeks.length" style="text-align:center;color:#bbb;padding:20px">운동 기록이 없어요</div>
           </div>
         </div>
       </div>
@@ -1998,9 +2179,10 @@ const scrapByStock = computed(() => {
         <div class="modal batch-modal">
           <h3>날짜별 운동 입력</h3>
 
-          <!-- 날짜 + 슈퍼세트 토글 -->
+          <!-- 날짜 + 운동 시간 + 슈퍼세트 토글 -->
           <div class="form-row" style="margin-bottom:14px">
             <div class="form-group"><label>날짜</label><input v-model="batchDate" type="date" class="input-field" /></div>
+            <div class="form-group"><label>운동 시간(분)</label><input v-model="batchDuration" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
             <div class="form-group" style="justify-content:flex-end">
               <label style="margin-bottom:6px">슈퍼세트 모드</label>
               <button :class="['superset-toggle', supersetMode && 'superset-on']"
@@ -2154,10 +2336,43 @@ const scrapByStock = computed(() => {
             <div class="form-group"><label>횟수</label><input v-model.number="newWorkout.reps" type="number" class="input-field" /></div>
             <div class="form-group"><label>무게 (kg)</label><input v-model.number="newWorkout.weight" type="number" class="input-field" /></div>
           </div>
-          <div class="form-group"><label>메모</label><input v-model="newWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
+          <div class="form-row">
+            <div class="form-group"><label>운동 시간(분)</label><input v-model.number="newWorkout.duration_min" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
+            <div class="form-group"><label>메모</label><input v-model="newWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
+          </div>
           <div class="modal-btns">
             <button @click="showAddWorkout=false" class="btn-cancel">취소</button>
             <button @click="addWorkout" class="btn-primary">저장</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 운동 수정 모달 -->
+      <div v-if="showEditWorkout && editingWorkout" class="modal-overlay" @click.self="showEditWorkout=false">
+        <div class="modal">
+          <h3>운동 수정</h3>
+          <div class="form-row">
+            <div class="form-group"><label>날짜</label><input v-model="editingWorkout.date" type="date" class="input-field" /></div>
+            <div class="form-group">
+              <label>부위</label>
+              <select v-model="editingWorkout.muscle_group" class="input-field">
+                <option v-for="g in MUSCLE_GROUPS" :key="g">{{ g }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group"><label>운동 종목</label><input v-model="editingWorkout.exercise" class="input-field" /></div>
+          <div class="form-row">
+            <div class="form-group"><label>세트</label><input v-model.number="editingWorkout.sets" type="number" class="input-field" /></div>
+            <div class="form-group"><label>횟수</label><input v-model.number="editingWorkout.reps" type="number" class="input-field" /></div>
+            <div class="form-group"><label>무게 (kg)</label><input v-model.number="editingWorkout.weight" type="number" class="input-field" /></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>운동 시간(분)</label><input v-model.number="editingWorkout.duration_min" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
+            <div class="form-group"><label>메모</label><input v-model="editingWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
+          </div>
+          <div class="modal-btns">
+            <button @click="showEditWorkout=false" class="btn-cancel">취소</button>
+            <button @click="saveEditWorkout" class="btn-primary">저장</button>
           </div>
         </div>
       </div>
@@ -2389,6 +2604,7 @@ const scrapByStock = computed(() => {
 .toast.visible { opacity:1; }
 
 .summary-grid { display:grid; grid-template-columns:1.5fr 1fr 1fr; gap:16px; }
+.health-summary-grid { grid-template-columns:repeat(4,1fr); gap:8px; }
 .summary-card { border-radius:16px; padding:20px 24px; color:white; }
 .summary-card.total      { background:linear-gradient(135deg,#1d4ed8,#2563eb); }
 .summary-card.long-card  { background:linear-gradient(135deg,#0891b2,#0284c7); transition:0.15s; }
@@ -2496,14 +2712,31 @@ const scrapByStock = computed(() => {
 .rtab { padding:4px 14px; border-radius:20px; border:1px solid #d0d0e8; background:transparent; color:#888; font-size:13px; cursor:pointer; }
 .rtab-on { background:#6c47ff; border-color:#6c47ff; color:#fff; }
 .report-label { font-size:12px; color:#888; margin-bottom:10px; }
-.report-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
-.rg-item { background:#f5f5ff; border-radius:10px; padding:10px 14px; }
-.rg-val { font-size:18px; font-weight:700; color:#1a1a3a; }
+.report-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:12px; }
+.rg-item { background:#f5f5ff; border-radius:10px; padding:8px 6px; text-align:center; }
+.rg-val { font-size:16px; font-weight:700; color:#1a1a3a; }
 .rg-label { font-size:11px; color:#888; margin-top:2px; display:flex; flex-direction:column; gap:2px; }
 .badge-up { color:#22c55e; font-size:11px; }
 .badge-down { color:#ef4444; font-size:11px; }
 .report-prs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
 .pr-badge { background:#fef3c7; color:#92400e; border-radius:20px; padding:4px 10px; font-size:12px; font-weight:600; }
+.pr-group { margin-bottom:14px; }
+.pr-group:last-child { margin-bottom:0; }
+.pr-group-label { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700; padding:8px 6px; border-radius:8px; background:#f8f8f8; margin-bottom:6px; cursor:pointer; }
+.pr-group-label:active { opacity:0.7; }
+.pr-group-cnt { margin-left:2px; color:#aaa; font-weight:500; }
+.pr-toggle { margin-left:auto; color:#bbb; font-size:11px; }
+.pr-clickable { cursor:pointer; }
+.pr-clickable:active { background:#f8f8f8; }
+.pr-chart { padding:10px 0 4px; }
+.pr-table { display:flex; flex-direction:column; gap:4px; }
+.pr-row { display:flex; align-items:center; padding:8px 4px; border-bottom:1px solid #f5f5f5; }
+.pr-row:last-child { border-bottom:none; }
+.pr-head { font-size:11px; font-weight:700; color:#aaa; padding-bottom:6px; }
+.pr-ex { flex:1; display:flex; align-items:center; gap:6px; font-size:13px; color:#333; }
+.pr-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.pr-val { width:72px; text-align:right; font-size:13px; color:#555; }
+.pr-orm { color:#6c47ff; font-weight:700; }
 .report-missing { font-size:12px; color:#f59e0b; margin-bottom:8px; }
 .report-comment-area { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
 .report-comment { background:#f0f0fa; border-radius:10px; padding:12px 14px; font-size:13px; color:#333; line-height:1.6; border-left:3px solid #6c47ff; }
@@ -2578,6 +2811,12 @@ const scrapByStock = computed(() => {
 .wl-item { background:#f8f8ff; border-radius:10px; padding:10px 12px; }
 .wl-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
 .wl-left { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.wl-date-group { margin-bottom:12px; }
+.wl-date-header { font-size:13px; font-weight:700; color:#6c47ff; padding:8px 10px; border-radius:10px; background:#ede9ff; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
+.wl-date-header:active { opacity:0.8; }
+.wl-date-meta { font-size:12px; font-weight:500; color:#9d7bea; }
+.week-pick-btn { width:100%; padding:14px; border:1.5px solid #ede9ff; border-radius:12px; background:white; font-size:15px; color:#333; cursor:pointer; text-align:left; }
+.week-pick-btn:active { background:#ede9ff; }
 .wl-date { font-size:11px; color:#888; }
 .wl-group { font-size:11px; color:#888; }
 .wl-name { font-size:14px; font-weight:700; color:#1a1a3a; margin-bottom:6px; }
@@ -2644,6 +2883,7 @@ const scrapByStock = computed(() => {
   .main { margin-left:0; overflow-x:hidden; }
   .hamburger { display:block; }
   .summary-grid { grid-template-columns:1fr; gap:8px; }
+  .health-summary-grid { grid-template-columns:repeat(2,1fr); }
   .chart-grid { grid-template-columns:1fr; }
   .form-row { flex-direction:column; }
   .top-actions { gap:6px; }
