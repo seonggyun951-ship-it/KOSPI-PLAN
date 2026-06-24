@@ -889,15 +889,62 @@ const deleteWorkout = async (id) => {
   if (!error) workouts.value = workouts.value.filter(w => w.id !== id)
 }
 
+const showEditGroup   = ref(false)
+const editGroupItems  = ref([])
+const editGroupDuration = ref(null)
 const showEditWorkout = ref(false)
 const editingWorkout  = ref(null)
+const openEditGroup = (group) => {
+  editGroupItems.value = group.items
+  editGroupDuration.value = group.items.find(w => w.duration_min)?.duration_min || null
+  showEditGroup.value = true
+}
+const saveDayDuration = async () => {
+  const ids = editGroupItems.value.map(w => w.id)
+  const val = editGroupDuration.value ? parseInt(editGroupDuration.value) : null
+  const { error } = await supabase.from('workouts').update({ duration_min: val }).in('id', ids)
+  if (!error) {
+    ids.forEach(id => {
+      const w = workouts.value.find(w => w.id === id)
+      if (w) w.duration_min = val
+    })
+  }
+}
 const openEditWorkout = (w) => {
-  editingWorkout.value = { ...w, exercise: w.exercise || '', duration_min: w.duration_min || null }
+  editingWorkout.value = {
+    id: w.id,
+    date: w.date,
+    muscle_group: w.muscle_group,
+    exercise: w.exercise || '',
+    sets: w.sets,
+    reps: w.reps,
+    weight: w.weight,
+    memo: w.memo || '',
+    duration_min: w.duration_min || null,
+    set_type: w.set_type || 'normal',
+    set_logs: w.set_logs?.length ? JSON.parse(JSON.stringify(w.set_logs)) : null,
+  }
+  showEditGroup.value = false
   showEditWorkout.value = true
+}
+const editAddSetLog = () => {
+  if (!editingWorkout.value.set_logs) return
+  const last = editingWorkout.value.set_logs.at(-1)
+  editingWorkout.value.set_logs.push({ weight: last?.weight ?? 0, reps: last?.reps ?? 10, type: 'normal' })
+}
+const editRemoveSetLog = (i) => {
+  if (!editingWorkout.value.set_logs || editingWorkout.value.set_logs.length <= 1) return
+  editingWorkout.value.set_logs.splice(i, 1)
 }
 const saveEditWorkout = async () => {
   if (!editingWorkout.value) return
   const { id, ...payload } = editingWorkout.value
+  if (payload.set_logs?.length) {
+    payload.sets = payload.set_logs.length
+    const best = payload.set_logs.reduce((b, s) => (s.weight ?? 0) > (b.weight ?? 0) ? s : b, payload.set_logs[0])
+    payload.reps = best.reps
+    payload.weight = best.weight
+  }
   const { data, error } = await supabase.from('workouts').update(payload).eq('id', id).select().single()
   if (!error && data) {
     const idx = workouts.value.findIndex(w => w.id === id)
@@ -1995,10 +2042,11 @@ const scrapByStock = computed(() => {
                   <div v-for="group in workoutsByDate" :key="group.date" class="wl-date-group">
                     <div class="wl-date-header" @click="toggleDate(group.date)">
                       <span>{{ group.date }}</span>
-                      <span class="wl-date-meta">
+                      <span class="wl-date-meta" style="display:flex;align-items:center;gap:6px">
                         {{ group.items.length }}개
                         <template v-if="group.items.find(w=>w.duration_min)">· {{ group.items.find(w=>w.duration_min).duration_min }}분</template>
                         · {{ isExpanded(group.date) ? '▲' : '▼' }}
+                        <button @click.stop="openEditGroup(group)" class="btn-sm" style="font-size:11px;padding:2px 7px">수정</button>
                       </span>
                     </div>
                     <template v-if="isExpanded(group.date)">
@@ -2009,17 +2057,14 @@ const scrapByStock = computed(() => {
                             <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
                             <span class="wl-group">{{ w.muscle_group }}</span>
                           </div>
-                          <div style="display:flex;gap:4px">
-                            <button @click="openEditWorkout(w)" class="btn-sm">수정</button>
-                            <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
-                          </div>
+                          <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
                         </div>
                         <div class="wl-name">{{ w.exercise }}</div>
                         <div class="wl-sets">
                           <template v-if="w.set_logs?.length">
                             <span v-for="(s, si) in w.set_logs" :key="si"
                               :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
-                              {{ si+1 }}. {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
+                              {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
                             </span>
                           </template>
                           <template v-else>
@@ -2336,13 +2381,34 @@ const scrapByStock = computed(() => {
             <div class="form-group"><label>횟수</label><input v-model.number="newWorkout.reps" type="number" class="input-field" /></div>
             <div class="form-group"><label>무게 (kg)</label><input v-model.number="newWorkout.weight" type="number" class="input-field" /></div>
           </div>
-          <div class="form-row">
-            <div class="form-group"><label>운동 시간(분)</label><input v-model.number="newWorkout.duration_min" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
-            <div class="form-group"><label>메모</label><input v-model="newWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
-          </div>
+          <div class="form-group"><label>메모</label><input v-model="newWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
           <div class="modal-btns">
             <button @click="showAddWorkout=false" class="btn-cancel">취소</button>
             <button @click="addWorkout" class="btn-primary">저장</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 날짜별 종목 선택 모달 -->
+      <div v-if="showEditGroup" class="modal-overlay" @click.self="showEditGroup=false">
+        <div class="modal">
+          <h3>{{ editGroupItems[0]?.date }} 수정</h3>
+          <div class="form-row" style="margin-bottom:14px;align-items:flex-end">
+            <div class="form-group" style="flex:1"><label>총 운동 시간(분)</label><input v-model.number="editGroupDuration" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
+            <button @click="saveDayDuration" class="btn-primary" style="height:38px;margin-bottom:0">저장</button>
+          </div>
+          <div style="font-size:12px;color:#888;margin-bottom:8px">종목 수정</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div v-for="w in editGroupItems" :key="w.id"
+              @click="openEditWorkout(w)"
+              style="padding:10px 14px;border:1px solid #e5e7eb;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center"
+              onmouseover="this.style.background='#f3f4f6'" onmouseout="this.style.background=''">
+              <span><span style="font-size:11px;color:#888;margin-right:6px">{{ w.muscle_group }}</span>{{ w.exercise }}</span>
+              <span style="font-size:12px;color:#888">{{ w.weight }}kg</span>
+            </div>
+          </div>
+          <div class="modal-btns" style="margin-top:14px">
+            <button @click="showEditGroup=false" class="btn-cancel">닫기</button>
           </div>
         </div>
       </div>
@@ -2361,15 +2427,30 @@ const scrapByStock = computed(() => {
             </div>
           </div>
           <div class="form-group"><label>운동 종목</label><input v-model="editingWorkout.exercise" class="input-field" /></div>
-          <div class="form-row">
-            <div class="form-group"><label>세트</label><input v-model.number="editingWorkout.sets" type="number" class="input-field" /></div>
-            <div class="form-group"><label>횟수</label><input v-model.number="editingWorkout.reps" type="number" class="input-field" /></div>
-            <div class="form-group"><label>무게 (kg)</label><input v-model.number="editingWorkout.weight" type="number" class="input-field" /></div>
-          </div>
-          <div class="form-row">
-            <div class="form-group"><label>운동 시간(분)</label><input v-model.number="editingWorkout.duration_min" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
-            <div class="form-group"><label>메모</label><input v-model="editingWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
-          </div>
+
+          <!-- 세트별 기록이 있으면 세트별로, 없으면 합산 -->
+          <template v-if="editingWorkout.set_logs?.length">
+            <label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block">세트별 기록</label>
+            <div v-for="(s, si) in editingWorkout.set_logs" :key="si"
+              style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span style="font-size:12px;color:#888;width:24px">{{ si+1 }}.</span>
+              <input v-model.number="s.weight" type="number" class="input-field" style="width:80px" placeholder="kg" />
+              <span style="font-size:12px;color:#888">kg ×</span>
+              <input v-model.number="s.reps" type="number" class="input-field" style="width:70px" placeholder="횟수" />
+              <span style="font-size:12px;color:#888">회</span>
+              <button @click="editRemoveSetLog(si)" class="btn-sm del" style="padding:2px 8px">−</button>
+            </div>
+            <button @click="editAddSetLog" class="btn-sm" style="margin-top:2px;margin-bottom:10px">+ 세트 추가</button>
+          </template>
+          <template v-else>
+            <div class="form-row">
+              <div class="form-group"><label>세트</label><input v-model.number="editingWorkout.sets" type="number" class="input-field" /></div>
+              <div class="form-group"><label>횟수</label><input v-model.number="editingWorkout.reps" type="number" class="input-field" /></div>
+              <div class="form-group"><label>무게 (kg)</label><input v-model.number="editingWorkout.weight" type="number" class="input-field" /></div>
+            </div>
+          </template>
+
+          <div class="form-group"><label>메모</label><input v-model="editingWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
           <div class="modal-btns">
             <button @click="showEditWorkout=false" class="btn-cancel">취소</button>
             <button @click="saveEditWorkout" class="btn-primary">저장</button>
