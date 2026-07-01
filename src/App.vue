@@ -8,7 +8,7 @@ const supabase = createClient(
 )
 
 const EDGE_FUNCTION_URL  = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/smooth-action'
-const KIS_PRICE_URL     = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/kis-price'
+const KIS_PRICE_URL     = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/price-auto-refresh'
 const NEWS_FETCH_URL    = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/news-fetch'
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
@@ -726,21 +726,33 @@ const deleteScrap = async (id, url) => {
 const addStock = async () => {
   if (!newStock.value.name.trim()) return
   setToast('saving')
-  const payload = {
-    name:          newStock.value.name?.trim() ?? '',
-    ticker:        newStock.value.ticker?.trim() ?? '',
-    quantity:      Number(newStock.value.quantity)      || 0,
-    avg_price:     Number(newStock.value.avg_price) || 0,
-    current_price: 0,
-    memo:          newStock.value.memo,
-    type:          newStock.value.type
+  const name     = newStock.value.name.trim()
+  const ticker   = newStock.value.ticker.trim()
+  const qty      = Number(newStock.value.quantity) || 0
+  const avgPrice = Number(newStock.value.avg_price) || 0
+  const type     = newStock.value.type
+
+  const existing = stocks.value.find(s => s.name === name && s.type === type)
+  if (existing) {
+    const newQty = existing.quantity + qty
+    const newAvg = qty && avgPrice
+      ? Math.round((existing.quantity * existing.avg_price + qty * avgPrice) / newQty)
+      : existing.avg_price
+    const { error } = await supabase.from('stock_items').update({ quantity: newQty, avg_price: newAvg }).eq('id', existing.id)
+    if (!error) {
+      existing.quantity  = newQty
+      existing.avg_price = newAvg
+      closeAddModal()
+      setToast('saved')
+    } else { setToast('error'); alert('수정 실패: ' + error.message) }
+    return
   }
+
+  const payload = { name, ticker, quantity: qty, avg_price: avgPrice, current_price: 0, memo: newStock.value.memo, type }
   const { data, error } = await supabase.from('stock_items').insert(payload).select().single()
   if (!error && data) {
     stocks.value.push(data)
-    newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' }
-    addModalCurrentPrice.value = null
-    showAdd.value = false
+    closeAddModal()
     setToast('saved')
     if (data.ticker) {
       const prices = await fetchPrices([data.ticker])
@@ -988,7 +1000,8 @@ const simSell = async () => {
   const newCash = simBalance.value + total
   await supabase.from('sim_balance').update({ cash: newCash }).eq('id', 1)
   simBalance.value = newCash
-  const { data: t } = await supabase.from('sim_trades').insert({ name: h.name, ticker: h.ticker, type:'sell', quantity: qty, price, total }).select().single()
+  const pnl = Math.round((price - h.avg_price) * qty)
+  const { data: t } = await supabase.from('sim_trades').insert({ name: h.name, ticker: h.ticker, type:'sell', quantity: qty, price, total, avg_price: h.avg_price, pnl }).select().single()
   if (t) simTrades.value.unshift(t)
   simSellTarget.value = null
   simSellForm.value = { quantity:'', price:'' }
@@ -2264,7 +2277,7 @@ const scrapByStock = computed(() => {
                 <div class="card-title">거래 내역</div>
                 <div class="table-wrap">
                   <table class="stock-table">
-                    <thead><tr><th>일시</th><th>종목</th><th>구분</th><th>수량</th><th>가격</th><th>금액</th></tr></thead>
+                    <thead><tr><th>일시</th><th>종목</th><th>구분</th><th>수량</th><th>가격</th><th>금액</th><th>손익</th></tr></thead>
                     <tbody>
                       <tr v-for="t in simTrades" :key="t.id">
                         <td style="font-size:12px;color:#9ca3af">{{ new Date(t.traded_at).toLocaleDateString('ko-KR') }}</td>
@@ -2273,8 +2286,10 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(t.quantity) }}주</td>
                         <td>{{ fmt(t.price) }}원</td>
                         <td :class="t.type==='buy'?'loss':'profit'">{{ t.type==='buy'?'-':'+' }}{{ fmt(t.total) }}원</td>
+                        <td v-if="t.type==='sell' && t.pnl != null" :class="t.pnl>=0?'profit':'loss'">{{ t.pnl>=0?'+':'' }}{{ fmt(t.pnl) }}원</td>
+                        <td v-else style="color:#d1d5db">—</td>
                       </tr>
-                      <tr v-if="simTrades.length===0"><td colspan="6" class="empty-td">거래 내역이 없어요</td></tr>
+                      <tr v-if="simTrades.length===0"><td colspan="7" class="empty-td">거래 내역이 없어요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -3117,6 +3132,10 @@ const scrapByStock = computed(() => {
           </div>
           <div v-if="simSellForm.quantity && simSellForm.price" class="sim-calc">
             매도금액: <b>{{ fmt(simSellForm.quantity * simSellForm.price) }}원</b>
+            &nbsp;|&nbsp; 손익:
+            <b :class="(simSellForm.price - simSellTarget.avg_price) * simSellForm.quantity >= 0 ? 'profit' : 'loss'">
+              {{ (simSellForm.price - simSellTarget.avg_price) * simSellForm.quantity >= 0 ? '+' : '' }}{{ fmt(Math.round((simSellForm.price - simSellTarget.avg_price) * simSellForm.quantity)) }}원
+            </b>
           </div>
           <div class="modal-btns">
             <button @click="simSellTarget=null" class="btn-cancel">취소</button>

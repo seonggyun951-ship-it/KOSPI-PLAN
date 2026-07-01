@@ -22,7 +22,7 @@ const getToken = async (supabase: any) => {
     body: JSON.stringify({ grant_type: 'client_credentials', appkey: APP_KEY, appsecret: APP_SECRET })
   })
   const d = await res.json()
-  if (!d.access_token) throw new Error(`토큰 실패: ${JSON.stringify(d)}`)
+  if (!d.access_token) throw new Error('토큰 실패: ' + JSON.stringify(d))
 
   await supabase.from('kis_token').upsert({ id: 1, token: d.access_token, expires_at: Date.now() + (d.expires_in - 300) * 1000 })
   return d.access_token
@@ -31,15 +31,15 @@ const getToken = async (supabase: any) => {
 const getPrice = async (token: string, ticker: string) => {
   if (ticker.includes('.KS') || ticker.includes('.KQ')) {
     const code = ticker.split('.')[0]
-    const res = await fetch(`${BASE}/uapi/domestic-stock/v1/quotations/inquire-price?fid_cond_mrkt_div_code=J&fid_input_iscd=${code}`, {
-      headers: { 'Authorization': `Bearer ${token}`, 'appkey': APP_KEY, 'appsecret': APP_SECRET, 'tr_id': 'FHKST01010100', 'Content-Type': 'application/json' }
+    const res = await fetch(BASE + '/uapi/domestic-stock/v1/quotations/inquire-price?fid_cond_mrkt_div_code=J&fid_input_iscd=' + code, {
+      headers: { 'Authorization': 'Bearer ' + token, 'appkey': APP_KEY, 'appsecret': APP_SECRET, 'tr_id': 'FHKST01010100', 'Content-Type': 'application/json' }
     })
     const data = await res.json()
     return Number(data?.output?.stck_prpr) || null
   } else {
     const excd = NAS_TICKERS.has(ticker) ? 'NAS' : 'NYS'
-    const res = await fetch(`${BASE}/uapi/overseas-price/v1/quotations/price?AUTH=&EXCD=${excd}&SYMB=${ticker}`, {
-      headers: { 'Authorization': `Bearer ${token}`, 'appkey': APP_KEY, 'appsecret': APP_SECRET, 'tr_id': 'HHDFS00000300', 'Content-Type': 'application/json' }
+    const res = await fetch(BASE + '/uapi/overseas-price/v1/quotations/price?AUTH=&EXCD=' + excd + '&SYMB=' + ticker, {
+      headers: { 'Authorization': 'Bearer ' + token, 'appkey': APP_KEY, 'appsecret': APP_SECRET, 'tr_id': 'HHDFS00000300', 'Content-Type': 'application/json' }
     })
     const data = await res.json()
     return Number(data?.output?.last) || null
@@ -50,7 +50,24 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const token = await getToken(supabase)
 
+    // 티커 목록이 body에 오면 → 가격만 반환 (프론트 수동 조회용)
+    let body: any = {}
+    try { body = await req.json() } catch {}
+
+    if (body.tickers && Array.isArray(body.tickers) && body.tickers.length > 0) {
+      const prices: Record<string, number> = {}
+      await Promise.all(body.tickers.map(async (ticker: string) => {
+        try {
+          const price = await getPrice(token, ticker)
+          if (price) prices[ticker] = price
+        } catch (e) { console.error(ticker + ' 실패:', e) }
+      }))
+      return new Response(JSON.stringify(prices), { headers: { ...cors, 'Content-Type': 'application/json' } })
+    }
+
+    // 티커 없으면 → DB 전체 갱신 (cron 자동 실행용)
     const { data: stockItems, error } = await supabase
       .from('stock_items')
       .select('id, ticker')
@@ -60,18 +77,16 @@ serve(async (req) => {
     if (error) throw error
     if (!stockItems?.length) return new Response(JSON.stringify({ ok: true, updated: 0 }), { headers: { ...cors, 'Content-Type': 'application/json' } })
 
-    const token = await getToken(supabase)
     let updated = 0
-
-    for (const stock of stockItems) {
+    await Promise.all(stockItems.map(async (stock: any) => {
       try {
         const price = await getPrice(token, stock.ticker)
         if (price) {
           await supabase.from('stock_items').update({ current_price: price }).eq('id', stock.id)
           updated++
         }
-      } catch (e) { console.error(`${stock.ticker} 실패:`, e) }
-    }
+      } catch (e) { console.error(stock.ticker + ' 실패:', e) }
+    }))
 
     return new Response(JSON.stringify({ ok: true, updated }), { headers: { ...cors, 'Content-Type': 'application/json' } })
   } catch (e) {
