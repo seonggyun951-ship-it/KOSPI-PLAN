@@ -223,6 +223,12 @@ const fetchCondPrice = async (ticker) => {
   if (condCurrentPrice.value && !condForm.value.target_price) condForm.value.target_price = condCurrentPrice.value
   condPriceFetching.value = false
 }
+const selectCondStock = (s) => {
+  condForm.value.name   = s.name
+  condForm.value.ticker = s.ticker
+  searchResults.value   = []
+  fetchCondPrice(s.ticker)
+}
 const adjustCondPrice = (delta) => {
   condForm.value.target_price = (Number(condForm.value.target_price) || condCurrentPrice.value || 0) + delta
 }
@@ -494,6 +500,12 @@ const selectSearchResult = async (result, stock) => {
 }
 
 const clearSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
+const closeAddModal = () => {
+  newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' }
+  addModalCurrentPrice.value = null
+  searchResults.value = []
+  showAdd.value = false
+}
 
 let toastTimer = null
 const setToast = (s) => {
@@ -3124,7 +3136,7 @@ const scrapByStock = computed(() => {
                 @input="searchStock(condForm.name)" @blur="() => { setTimeout(()=>searchResults.value=[],200) }" />
               <div v-if="searchResults.length" class="search-dropdown">
                 <div v-for="s in searchResults" :key="s.ticker" class="search-item"
-                  @mousedown.prevent="condForm.name=s.name; condForm.ticker=s.ticker; fetchCondPrice(s.ticker); searchResults.value=[]">
+                  @mousedown.prevent="selectCondStock(s)">
                   <div class="si-name">{{ s.name }}</div>
                   <div class="si-ticker">{{ s.ticker }}</div>
                 </div>
@@ -3175,7 +3187,7 @@ const scrapByStock = computed(() => {
       </div>
 
       <!-- 종목 추가 모달 -->
-      <div v-if="showAdd" class="modal-overlay" @click.self="showAdd=false">
+      <div v-if="showAdd" class="modal-overlay" @click.self="closeAddModal">
         <div class="modal">
           <h3>종목 추가</h3>
           <div class="form-row">
@@ -3223,7 +3235,7 @@ const scrapByStock = computed(() => {
             <div class="form-group"><label>메모</label><input v-model="newStock.memo" placeholder="메모" class="input-field" /></div>
           </div>
           <div class="modal-btns">
-            <button @click="showAdd=false" class="btn-cancel">취소</button>
+            <button @click="closeAddModal" class="btn-cancel">취소</button>
             <button @click="addStock" class="btn-primary" :disabled="saveStatus==='saving'">추가</button>
           </div>
         </div>
@@ -3606,6 +3618,7 @@ const scrapByStock = computed(() => {
 .form-group { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
 .form-group label { font-size:12px; font-weight:600; color:#6b7280; }
 .input-field { width:100%; padding:11px 13px; border:1px solid #e0e7ff; border-radius:10px; font-size:14px; background:#f8faff; }
+.input-field::placeholder { color:#c4ccd8; }
 .input-field:focus { outline:none; border-color:#2563eb; background:white; }
 .type-select { display:flex; gap:8px; }
 .type-select button { flex:1; padding:10px; border:2px solid #e0e7ff; border-radius:10px; background:white; font-size:13px; font-weight:600; cursor:pointer; color:#6b7280; }
