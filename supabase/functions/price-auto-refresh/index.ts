@@ -10,7 +10,7 @@ const APP_KEY    = 'PSvGVGKNkvC9QV0FKZIczIdkG8W2sGEmDgIs'
 const APP_SECRET = 'lnzw8S6Vr1qNIRJST1Lq8pjWlmIKKXvOuNnp2mgaENS9BuT+h1S5fcWi7x5itkvvebukB8Ccg+gtcIpJMiHg4dKkCESo9mn/++zGOFoNbQ5pYmG114x8whyK6Z9NxWVHtnamJi8arhaDARg2umu2fpJ/uB+P+0EB5oKSWcs1BlKPvBxtmPY='
 const BASE = 'https://openapi.koreainvestment.com:9443'
 
-const NAS_TICKERS = new Set(['TSLA','AAPL','NVDA','MSFT','AMZN','GOOGL','META','NFLX','AMD','PLTR','AVGO','ARM','COIN','SNOW','SMCI'])
+const NAS_TICKERS = new Set(['TSLA','AAPL','NVDA','MSFT','AMZN','GOOGL','META','NFLX','AMD','PLTR','AVGO','ARM','COIN','SNOW','SMCI','PANW','CRWD','NOW','CRM','QCOM','INTC'])
 
 const getToken = async (supabase: any) => {
   const { data } = await supabase.from('kis_token').select('*').eq('id', 1).single()

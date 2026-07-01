@@ -130,6 +130,23 @@ const STOCK_DB = [
   { name:'HPSP',               ticker:'403870.KQ' },
   { name:'리노공업',           ticker:'058470.KQ' },
   { name:'원익IPS',            ticker:'240810.KQ' },
+  { name:'더존비즈온',         ticker:'012510.KQ' },
+  { name:'솔브레인',           ticker:'036830.KQ' },
+  { name:'클래시스',           ticker:'214150.KQ' },
+  { name:'씨에스윈드',         ticker:'112610.KQ' },
+  { name:'포스코DX',           ticker:'022100.KQ' },
+  // 우선주
+  { name:'삼성전자우',         ticker:'005935.KS' },
+  { name:'현대차우',           ticker:'005387.KS' },
+  { name:'현대차2우B',         ticker:'005385.KS' },
+  { name:'기아우',             ticker:'000272.KS' },
+  { name:'LG화학우',           ticker:'051915.KS' },
+  { name:'삼성SDI우',          ticker:'006405.KS' },
+  { name:'아모레퍼시픽우',     ticker:'090435.KS' },
+  { name:'LG생활건강우',       ticker:'051905.KS' },
+  { name:'S-Oil우',            ticker:'010955.KS' },
+  { name:'SK이노베이션우',     ticker:'096775.KS' },
+  { name:'두산밥캣우',         ticker:'241565.KS' },
   // 미국
   { name:'Apple',              ticker:'AAPL' },
   { name:'Tesla',              ticker:'TSLA' },
@@ -145,6 +162,16 @@ const STOCK_DB = [
   { name:'TSMC',               ticker:'TSM' },
   { name:'Arm Holdings',       ticker:'ARM' },
   { name:'Coinbase',           ticker:'COIN' },
+  { name:'Snowflake',          ticker:'SNOW' },
+  { name:'Super Micro',        ticker:'SMCI' },
+  { name:'Palo Alto',          ticker:'PANW' },
+  { name:'CrowdStrike',        ticker:'CRWD' },
+  { name:'ServiceNow',         ticker:'NOW' },
+  { name:'Salesforce',         ticker:'CRM' },
+  { name:'Qualcomm',           ticker:'QCOM' },
+  { name:'Intel',              ticker:'INTC' },
+  { name:'JPMorgan',           ticker:'JPM' },
+  { name:'Berkshire B',        ticker:'BRK.B' },
 ]
 
 // ── 인증
@@ -186,6 +213,19 @@ const simTrades       = ref([])
 const tradeConditions = ref([])
 const showCondForm    = ref(false)
 const condForm        = ref({ name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' })
+const condCurrentPrice = ref(null)
+const condPriceFetching = ref(false)
+const fetchCondPrice = async (ticker) => {
+  if (!ticker) { condCurrentPrice.value = null; return }
+  condPriceFetching.value = true
+  const prices = await fetchPrices([ticker])
+  condCurrentPrice.value = prices[ticker] || null
+  if (condCurrentPrice.value && !condForm.value.target_price) condForm.value.target_price = condCurrentPrice.value
+  condPriceFetching.value = false
+}
+const adjustCondPrice = (delta) => {
+  condForm.value.target_price = (Number(condForm.value.target_price) || condCurrentPrice.value || 0) + delta
+}
 
 // ── 장기/단기 매도
 const stockTrades    = ref([])
@@ -405,6 +445,7 @@ const addCondition = async () => {
   if (error) return alert('저장 실패')
   tradeConditions.value.unshift(data)
   condForm.value = { name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' }
+  condCurrentPrice.value = null
   showCondForm.value = false
 }
 const toggleCondition = async (cond) => {
@@ -437,10 +478,19 @@ const searchStock = (query) => {
   ).slice(0, 6)
 }
 
-const selectSearchResult = (result, stock) => {
+const addModalCurrentPrice  = ref(null)
+const addModalPriceFetching = ref(false)
+const selectSearchResult = async (result, stock) => {
   stock.name   = result.name
   stock.ticker = result.ticker
   searchResults.value = []
+  if (stock === newStock.value && result.ticker) {
+    addModalCurrentPrice.value = null
+    addModalPriceFetching.value = true
+    const prices = await fetchPrices([result.ticker])
+    addModalCurrentPrice.value = prices[result.ticker] || null
+    addModalPriceFetching.value = false
+  }
 }
 
 const clearSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
@@ -538,10 +588,10 @@ const autoRefreshPrices = async () => {
   if (!targets.length) return
   const tickers = targets.map(s => s.ticker)
   const prices  = await fetchPrices(tickers)
-  for (const stock of targets) {
+  await Promise.all(targets.map(stock => {
     const price = prices[stock.ticker]
-    if (price) await updateCurrentPrice(stock, price)
-  }
+    return price ? updateCurrentPrice(stock, price) : Promise.resolve()
+  }))
 }
 
 // ── 현재가 (KIS API via Edge Function)
@@ -567,10 +617,10 @@ const refreshAllPrices = async () => {
   const tickers = targets.map(s => s.ticker)
   const prices  = await fetchPrices(tickers)
   let updated = 0
-  for (const stock of targets) {
+  await Promise.all(targets.map(async stock => {
     const price = prices[stock.ticker]
     if (price) { await updateCurrentPrice(stock, price); updated++ }
-  }
+  }))
   refreshing.value = false
   alert(`${updated}/${targets.length}개 업데이트 완료!`)
 }
@@ -677,6 +727,7 @@ const addStock = async () => {
   if (!error && data) {
     stocks.value.push(data)
     newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' }
+    addModalCurrentPrice.value = null
     showAdd.value = false
     setToast('saved')
     if (data.ticker) {
@@ -2219,44 +2270,7 @@ const scrapByStock = computed(() => {
               <div class="card mt16">
                 <div class="report-header">
                   <div class="card-title" style="margin:0">자동매매 조건</div>
-                  <button class="btn-add-top" @click="showCondForm=!showCondForm">+ 조건 추가</button>
-                </div>
-                <div v-if="showCondForm" class="cond-form">
-                  <div class="form-row">
-                    <div class="form-group">
-                      <label>종목명</label>
-                      <input v-model="condForm.name" class="input-field" placeholder="삼성전자"
-                        @input="searchStock(condForm.name)" @blur="() => { setTimeout(()=>searchResults.value=[],200) }" />
-                      <div v-if="searchResults.length" class="autocomplete-list">
-                        <div v-for="s in searchResults" :key="s.ticker" class="autocomplete-item"
-                          @mousedown="condForm.name=s.name; condForm.ticker=s.ticker; searchResults.value=[]">
-                          {{ s.name }} <span style="color:#9ca3af;font-size:12px">{{ s.ticker }}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="form-group">
-                      <label>티커</label>
-                      <input v-model="condForm.ticker" class="input-field" placeholder="005930.KS" />
-                    </div>
-                  </div>
-                  <div class="form-row">
-                    <div class="form-group">
-                      <label>구분</label>
-                      <select v-model="condForm.condition_type" class="input-field">
-                        <option value="buy">매수</option>
-                        <option value="sell">매도</option>
-                      </select>
-                    </div>
-                    <div class="form-group">
-                      <label>목표가</label>
-                      <input v-model.number="condForm.target_price" type="number" class="input-field" placeholder="0" />
-                    </div>
-                    <div class="form-group">
-                      <label>수량</label>
-                      <input v-model.number="condForm.quantity" type="number" class="input-field" placeholder="0" />
-                    </div>
-                  </div>
-                  <button @click="addCondition" class="btn-primary" style="width:100%;margin-top:8px">등록</button>
+                  <button class="btn-add-top" @click="showCondForm=true">+ 조건 추가</button>
                 </div>
                 <div class="table-wrap">
                   <table class="stock-table">
@@ -3099,6 +3113,67 @@ const scrapByStock = computed(() => {
         </div>
       </div>
 
+      <!-- 자동매매 조건 추가 모달 -->
+      <div v-if="showCondForm" class="modal-overlay" @click.self="showCondForm=false">
+        <div class="modal">
+          <h3>자동매매 조건 추가</h3>
+          <div class="form-row">
+            <div class="form-group" style="position:relative">
+              <label>종목명</label>
+              <input v-model="condForm.name" class="input-field" placeholder="삼성전자"
+                @input="searchStock(condForm.name)" @blur="() => { setTimeout(()=>searchResults.value=[],200) }" />
+              <div v-if="searchResults.length" class="search-dropdown">
+                <div v-for="s in searchResults" :key="s.ticker" class="search-item"
+                  @mousedown.prevent="condForm.name=s.name; condForm.ticker=s.ticker; fetchCondPrice(s.ticker); searchResults.value=[]">
+                  <div class="si-name">{{ s.name }}</div>
+                  <div class="si-ticker">{{ s.ticker }}</div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>티커</label>
+              <input v-model="condForm.ticker" class="input-field" placeholder="005930.KS" />
+            </div>
+          </div>
+          <div v-if="condPriceFetching || condCurrentPrice" style="font-size:13px;padding:6px 2px;color:#374151">
+            <span v-if="condPriceFetching" style="color:#9ca3af">현재가 조회 중...</span>
+            <span v-else>현재가 <b>{{ condCurrentPrice?.toLocaleString() }}원</b></span>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>구분</label>
+              <select v-model="condForm.condition_type" class="input-field">
+                <option value="buy">매수</option>
+                <option value="sell">매도</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>목표가</label>
+              <input v-model.number="condForm.target_price" type="number" class="input-field" placeholder="0" />
+              <div v-if="condCurrentPrice" style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+                <button type="button" @click="adjustCondPrice(-10000)" class="adj-btn">-1만</button>
+                <button type="button" @click="adjustCondPrice(-1000)"  class="adj-btn">-1천</button>
+                <button type="button" @click="adjustCondPrice(-100)"   class="adj-btn">-100</button>
+                <button type="button" @click="adjustCondPrice(-10)"    class="adj-btn">-10</button>
+                <button type="button" @click="condForm.target_price=condCurrentPrice" class="adj-btn adj-btn-reset">현재가</button>
+                <button type="button" @click="adjustCondPrice(10)"     class="adj-btn">+10</button>
+                <button type="button" @click="adjustCondPrice(100)"    class="adj-btn">+100</button>
+                <button type="button" @click="adjustCondPrice(1000)"   class="adj-btn">+1천</button>
+                <button type="button" @click="adjustCondPrice(10000)"  class="adj-btn">+1만</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>수량</label>
+              <input v-model.number="condForm.quantity" type="number" class="input-field" placeholder="0" />
+            </div>
+          </div>
+          <div class="modal-btns">
+            <button @click="showCondForm=false" class="btn-cancel">취소</button>
+            <button @click="addCondition" class="btn-primary">등록</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 종목 추가 모달 -->
       <div v-if="showAdd" class="modal-overlay" @click.self="showAdd=false">
         <div class="modal">
@@ -3128,6 +3203,10 @@ const scrapByStock = computed(() => {
                 ※ 티커 없어도 종목 추가는 가능해요
               </div>
             </div>
+          </div>
+          <div v-if="addModalPriceFetching || addModalCurrentPrice" style="font-size:13px;padding:6px 2px;color:#374151">
+            <span v-if="addModalPriceFetching" style="color:#9ca3af">현재가 조회 중...</span>
+            <span v-else>현재가 <b>{{ addModalCurrentPrice?.toLocaleString() }}원</b></span>
           </div>
           <div class="form-row">
             <div class="form-group"><label>수량 (주)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.quantity)" @input="newStock.quantity = parseInput($event.target.value)" class="input-field" placeholder="10" /></div>
@@ -3551,6 +3630,9 @@ const scrapByStock = computed(() => {
 
 .sim-header { display:flex; align-items:stretch; gap:16px; }
 .cond-form { background:#f8f7ff; border-radius:10px; padding:14px; margin:12px 0; }
+.adj-btn { padding:3px 7px; font-size:12px; border:1px solid #d1d5db; border-radius:5px; background:#fff; cursor:pointer; }
+.adj-btn:hover { background:#f3f4f6; }
+.adj-btn-reset { background:#ede9fe; border-color:#a78bfa; color:#5b21b6; }
 .sim-card { background:linear-gradient(135deg,#1e3a5f,#2d6a4f) !important; color:#fff !important; }
 .sim-card .sc-label { color:rgba(255,255,255,0.8) !important; }
 .sim-card .sc-value { color:#fff !important; }
