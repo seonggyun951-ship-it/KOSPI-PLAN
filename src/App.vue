@@ -180,11 +180,20 @@ const bookmarkedIds   = ref(new Set())
 const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' })
 
 // ── 모의투자
-const simBalance  = ref(0)
-const simHoldings = ref([])
-const simTrades   = ref([])
+const simBalance      = ref(0)
+const simHoldings     = ref([])
+const simTrades       = ref([])
+const tradeConditions = ref([])
+const showCondForm    = ref(false)
+const condForm        = ref({ name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' })
+
+// ── 장기/단기 매도
+const stockTrades    = ref([])
+const stockSellTarget = ref(null)
+const stockSellForm  = ref({ quantity:'', price:'' })
 
 // ── 헬스
+const userExercises   = ref([])  // { id, exercise, muscle_group }
 const workouts        = ref([])
 const weightLogs      = ref([])
 const reports         = ref([])
@@ -198,11 +207,54 @@ const selectedReport   = ref(null)
 const reportGenerating = ref(false)
 const showPasteReport  = ref(false)
 const pasteForm = ref({ type:'weekly', period_label:'', content:'' })
+
+// 보고서 연/월/주 선택
+const reportSelYear = ref(new Date().getFullYear())
+const reportSelMonth = ref(new Date().getMonth() + 1)
+const reportSelWeek = ref('')
+
+const reportYears = (type) => [...new Set(
+  reports.value.filter(r => r.type === type && r.period_start)
+    .map(r => parseInt(r.period_start.slice(0, 4)))
+)].sort((a, b) => b - a)
+
+const reportMonths = computed(() => [...new Set(
+  reports.value.filter(r => r.type === 'monthly' && r.period_start?.startsWith(String(reportSelYear.value)))
+    .map(r => parseInt(r.period_start.slice(5, 7)))
+)].sort((a, b) => b - a))
+
+const reportWeeks = computed(() =>
+  reports.value.filter(r => r.type === 'weekly' && r.period_start?.startsWith(String(reportSelYear.value)))
+    .sort((a, b) => b.period_start.localeCompare(a.period_start))
+)
+
+const foundMonthlyReport = computed(() =>
+  reports.value.find(r => r.type === 'monthly' &&
+    r.period_start?.startsWith(`${reportSelYear.value}-${String(reportSelMonth.value).padStart(2, '0')}`))
+)
+const foundWeeklyReport = computed(() =>
+  reports.value.find(r => r.type === 'weekly' && r.period_start === reportSelWeek.value)
+)
 const deleteReport = async (id) => {
   const { error } = await supabase.from('reports').delete().eq('id', id)
   if (!error) {
     reports.value = reports.value.filter(r => r.id !== id)
     if (selectedReport.value?.id === id) selectedReport.value = null
+  }
+}
+const editingReport = ref(false)
+const editReportContent = ref('')
+const startEditReport = () => {
+  editReportContent.value = selectedReport.value.content
+  editingReport.value = true
+}
+const saveEditReport = async () => {
+  const { error } = await supabase.from('reports').update({ content: editReportContent.value }).eq('id', selectedReport.value.id)
+  if (!error) {
+    selectedReport.value.content = editReportContent.value
+    const r = reports.value.find(r => r.id === selectedReport.value.id)
+    if (r) r.content = editReportContent.value
+    editingReport.value = false
   }
 }
 
@@ -342,6 +394,30 @@ const EXERCISE_DB = {
     '수영'
   ]
 }
+// ── 자동매매 조건
+const addCondition = async () => {
+  const f = condForm.value
+  if (!f.name || !f.ticker || !f.target_price || !f.quantity) return alert('모든 항목을 입력해주세요')
+  const { data, error } = await supabase.from('trade_conditions').insert({
+    name: f.name, ticker: f.ticker, condition_type: f.condition_type,
+    target_price: Number(f.target_price), quantity: Number(f.quantity), active: true
+  }).select().single()
+  if (error) return alert('저장 실패')
+  tradeConditions.value.unshift(data)
+  condForm.value = { name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' }
+  showCondForm.value = false
+}
+const toggleCondition = async (cond) => {
+  const newActive = !cond.active
+  await supabase.from('trade_conditions').update({ active: newActive }).eq('id', cond.id)
+  cond.active = newActive
+}
+const deleteCondition = async (cond) => {
+  if (!confirm('삭제할까요?')) return
+  await supabase.from('trade_conditions').delete().eq('id', cond.id)
+  tradeConditions.value = tradeConditions.value.filter(c => c.id !== cond.id)
+}
+
 const showSimBuy  = ref(false)
 const simSellTarget = ref(null)
 const simBuyForm  = ref({ name:'', ticker:'', quantity:'', price:'' })
@@ -383,7 +459,7 @@ const login = async () => {
     email: inputEmail.value.trim(),
     password: inputPassword.value
   })
-  if (error) { loginError.value = '이메일 또는 비밀번호가 틀렸습니다.'; return }
+  if (error) { loginError.value = '아이디 또는 비밀번호가 틀렸습니다.'; return }
   isAuthorized.value = true
   await fetchAll()
   startInactivityWatch()
@@ -421,17 +497,20 @@ const stopInactivityWatch = () => {
 const fetchAll = async () => {
   loading.value = true
   try {
-    const [stockRes, newsRes, balRes, holdRes, tradeRes, workoutRes, weightRes, reportRes, profileRes, memoRes] = await Promise.all([
+    const [stockRes, newsRes, balRes, holdRes, tradeRes, condRes, stockTradeRes, workoutRes, weightRes, reportRes, profileRes, memoRes, userExRes] = await Promise.all([
       supabase.from('stock_items').select('*').order('created_at'),
       supabase.from('saved_news').select('*').order('created_at', { ascending: false }),
       supabase.from('sim_balance').select('*').eq('id', 1).maybeSingle(),
       supabase.from('sim_holdings').select('*').order('created_at'),
       supabase.from('sim_trades').select('*').order('traded_at', { ascending: false }),
-      supabase.from('workouts').select('*').order('date', { ascending: false }),
+      supabase.from('trade_conditions').select('*').order('created_at', { ascending: false }),
+      supabase.from('stock_trades').select('*').order('traded_at', { ascending: false }),
+      supabase.from('workouts').select('*').order('date', { ascending: false }).order('created_at', { ascending: true }),
       supabase.from('weight_logs').select('*').order('date'),
       supabase.from('reports').select('*').order('period_start', { ascending: false }),
       supabase.from('user_profile').select('*').eq('id', 1).maybeSingle(),
-      supabase.from('workout_memos').select('*').order('date', { ascending: false })
+      supabase.from('workout_memos').select('*').order('date', { ascending: false }),
+      supabase.from('user_exercises').select('*').order('created_at')
     ])
     if (stockRes.data) stocks.value = stockRes.data
     if (newsRes.data)  {
@@ -439,13 +518,16 @@ const fetchAll = async () => {
       bookmarkedIds.value = new Set(newsRes.data.map(n => n.url))
     }
     simBalance.value  = balRes.data?.cash ?? 10000000
-    if (holdRes.data)  simHoldings.value = holdRes.data
-    if (tradeRes.data) simTrades.value   = tradeRes.data
+    if (holdRes.data)  simHoldings.value     = holdRes.data
+    if (tradeRes.data) simTrades.value       = tradeRes.data
+    if (condRes.data)       tradeConditions.value = condRes.data
+    if (stockTradeRes.data) stockTrades.value     = stockTradeRes.data
     if (workoutRes.data) workouts.value  = workoutRes.data
     if (weightRes.data)  weightLogs.value = weightRes.data
     if (reportRes.data)  reports.value   = reportRes.data
     if (profileRes.data) profile.value  = { height: profileRes.data.height||'', age: profileRes.data.age||'', gender: profileRes.data.gender||'남', goal: profileRes.data.goal||'' }
     if (memoRes.data)    workoutMemos.value = memoRes.data
+    if (userExRes.data)  userExercises.value = userExRes.data
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
@@ -624,6 +706,39 @@ const deleteStock = async (id) => {
   else { setToast('error'); alert('삭제 실패: ' + error.message) }
 }
 
+const openStockSell = (s) => {
+  stockSellTarget.value = s
+  stockSellForm.value = { quantity: '', price: s.current_price || s.avg_price || '' }
+}
+const stockSell = async () => {
+  const s     = stockSellTarget.value
+  const qty   = Number(stockSellForm.value.quantity)
+  const price = Number(stockSellForm.value.price)
+  if (!qty || !price) return alert('수량과 가격을 입력해주세요')
+  if (qty > s.quantity) return alert('보유 수량 초과')
+  const pnl = (price - s.avg_price) * qty
+  await supabase.from('stock_trades').insert({ name: s.name, ticker: s.ticker, type: s.type, quantity: qty, avg_price: s.avg_price, sell_price: price, pnl })
+  stockTrades.value.unshift({ name: s.name, ticker: s.ticker, type: s.type, quantity: qty, avg_price: s.avg_price, sell_price: price, pnl, traded_at: new Date().toISOString() })
+  if (qty === s.quantity) {
+    await supabase.from('stock_items').delete().eq('id', s.id)
+    stocks.value = stocks.value.filter(x => x.id !== s.id)
+  } else {
+    await supabase.from('stock_items').update({ quantity: s.quantity - qty }).eq('id', s.id)
+    s.quantity -= qty
+  }
+  stockSellTarget.value = null
+  stockSellForm.value = { quantity:'', price:'' }
+}
+
+const resetStocks = async (type) => {
+  const label = type === 'long' ? '장기투자' : '단기투자'
+  if (!confirm(`${label} 데이터를 초기화할까요?\n보유 종목과 거래 기록이 모두 삭제됩니다.`)) return
+  await supabase.from('stock_items').delete().eq('type', type)
+  await supabase.from('stock_trades').delete().eq('type', type)
+  stocks.value = stocks.value.filter(s => s.type !== type)
+  stockTrades.value = stockTrades.value.filter(t => t.type !== type)
+}
+
 const updateCurrentPrice = async (stock, price) => {
   const { error } = await supabase.from('stock_items').update({ current_price: price }).eq('id', stock.id)
   if (!error) stock.current_price = price
@@ -675,6 +790,16 @@ const short = computed(() => calcGroup(shortStocks.value))
 const stockPnl   = s => s.quantity * (s.current_price - s.avg_price)
 const stockRate  = s => s.avg_price ? (s.current_price - s.avg_price) / s.avg_price * 100 : 0
 const stockValue = s => s.quantity * s.current_price
+
+const realizedPnl = (type) => stockTrades.value.filter(t => t.type === type).reduce((s, t) => s + t.pnl, 0)
+const longRealizedPnl  = computed(() => realizedPnl('long'))
+const shortRealizedPnl = computed(() => realizedPnl('short'))
+const longTotalPnl     = computed(() => long.value.pnl + longRealizedPnl.value)
+const shortTotalPnl    = computed(() => short.value.pnl + shortRealizedPnl.value)
+const longTotalInvest  = computed(() => long.value.invest + stockTrades.value.filter(t=>t.type==='long').reduce((s,t)=>s+t.avg_price*t.quantity,0))
+const shortTotalInvest = computed(() => short.value.invest + stockTrades.value.filter(t=>t.type==='short').reduce((s,t)=>s+t.avg_price*t.quantity,0))
+const longTotalRate    = computed(() => longTotalInvest.value ? longTotalPnl.value / longTotalInvest.value * 100 : 0)
+const shortTotalRate   = computed(() => shortTotalInvest.value ? shortTotalPnl.value / shortTotalInvest.value * 100 : 0)
 
 // 파이차트
 const pieData = computed(() => {
@@ -728,6 +853,9 @@ const simCostBasis    = computed(() => simHoldings.value.reduce((s, h) => s + h.
 const simTotalPnl     = computed(() => simHoldingValue.value - simCostBasis.value)
 const simTotalRate    = computed(() => simCostBasis.value ? simTotalPnl.value / simCostBasis.value * 100 : 0)
 const simTotalAsset   = computed(() => simBalance.value + simHoldingValue.value)
+const SIM_INIT_CAPITAL = 10000000
+const simOverallPnl  = computed(() => simTotalAsset.value - SIM_INIT_CAPITAL)
+const simOverallRate = computed(() => simOverallPnl.value / SIM_INIT_CAPITAL * 100)
 
 const simSearchStock = (q) => {
   if (!q || q.trim().length < 1) { simSearchResults.value = []; return }
@@ -813,12 +941,79 @@ const simReset = async () => {
   simBalance.value = 10000000; simHoldings.value = []; simTrades.value = []
 }
 
+// 커스텀 종목
+const saveUserExercise = async (exercise, muscle_group) => {
+  const exists = userExercises.value.some(e => e.exercise === exercise && e.muscle_group === muscle_group)
+  if (exists) return
+  const { data, error } = await supabase.from('user_exercises').insert({ exercise, muscle_group }).select().single()
+  if (!error && data) userExercises.value.push(data)
+}
+const deleteUserExercise = async (id) => {
+  const { error } = await supabase.from('user_exercises').delete().eq('id', id)
+  if (!error) userExercises.value = userExercises.value.filter(e => e.id !== id)
+}
+// 즐겨찾기
+const favorites = ref(JSON.parse(localStorage.getItem('workout_favorites') || '[]'))
+const toggleFavorite = (exercise) => {
+  if (!exercise || exercise === '__custom__') return
+  const idx = favorites.value.indexOf(exercise)
+  if (idx >= 0) favorites.value.splice(idx, 1)
+  else favorites.value.push(exercise)
+  localStorage.setItem('workout_favorites', JSON.stringify(favorites.value))
+}
+const isFavorite = (exercise) => favorites.value.includes(exercise)
+
+const exerciseOptionsAll = (muscle_group) => {
+  const preset = EXERCISE_DB[muscle_group] || []
+  const custom = userExercises.value.filter(e => e.muscle_group === muscle_group).map(e => e.exercise)
+  return [...new Set([...preset, ...custom])]
+}
+const exerciseFavsFor = (muscle_group) => {
+  return exerciseOptionsAll(muscle_group).filter(ex => favorites.value.includes(ex))
+}
+const exerciseRecentFor = (muscle_group) => {
+  const seen = new Set()
+  const recent = []
+  for (const w of workouts.value) {
+    if (w.muscle_group === muscle_group && !seen.has(w.exercise)) {
+      seen.add(w.exercise)
+      recent.push(w.exercise)
+      if (recent.length >= 5) break
+    }
+  }
+  return recent
+}
+const exerciseRestFor = (muscle_group) => {
+  const recentSet = new Set(exerciseRecentFor(muscle_group))
+  return exerciseOptionsAll(muscle_group).filter(ex => !recentSet.has(ex))
+}
+const exerciseOptions = (muscle_group) => exerciseOptionsAll(muscle_group)
+
+// 이전 기록 불러오기
+const showPrevRecord = ref(false)
+const lastWorkoutOf = (exerciseName) => {
+  if (!exerciseName || exerciseName === '__custom__') return null
+  return workouts.value.find(w => w.exercise === exerciseName) || null
+}
+const loadPrevRecord = (prev) => {
+  if (!prev) return
+  if (prev.set_logs?.length) {
+    batchEntry.value.set_logs = JSON.parse(JSON.stringify(prev.set_logs))
+  } else {
+    batchEntry.value.set_logs = Array.from({ length: prev.sets }, () => ({ weight: prev.weight, reps: prev.reps, type: 'normal' }))
+  }
+  showPrevRecord.value = false
+}
+
 // ── 헬스 CRUD
 const addBatchItem = () => {
   const exerciseName = batchEntry.value.exercise === '__custom__'
     ? batchEntry.value.customExercise.trim()
     : batchEntry.value.exercise.trim()
   if (!exerciseName || !batchEntry.value.set_logs.length) return
+  if (batchEntry.value.exercise === '__custom__' && exerciseName) {
+    saveUserExercise(exerciseName, batchEntry.value.muscle_group)
+  }
 
   const logs    = batchEntry.value.set_logs
   const hasDropset = logs.some(s => s.type === 'dropset')
@@ -843,7 +1038,7 @@ const removeBatchItem = (i) => { batchItems.value.splice(i, 1) }
 const saveBatchWorkout = async () => {
   if (!batchItems.value.length) return
   batchSaving.value = true
-  const rows = batchItems.value.map(item => ({ ...item, date: batchDate.value, memo: '', duration_min: batchDuration.value ? parseInt(batchDuration.value) : null }))
+  const rows = batchItems.value.map((item, i) => ({ ...item, date: batchDate.value, memo: '', duration_min: batchDuration.value ? parseInt(batchDuration.value) : null, sort_order: i }))
   const { data, error } = await supabase.from('workouts').insert(rows).select()
   if (!error && data) {
     data.forEach(w => workouts.value.unshift(w))
@@ -875,6 +1070,9 @@ const addWorkout = async () => {
     ? (newWorkout.value.customExercise || '').trim()
     : newWorkout.value.exercise.trim()
   if (!exerciseName) return
+  if (newWorkout.value.exercise === '__custom__' && exerciseName) {
+    saveUserExercise(exerciseName, newWorkout.value.muscle_group)
+  }
   const { customExercise, ...payload } = newWorkout.value
   payload.exercise = exerciseName
   const { data, error } = await supabase.from('workouts').insert(payload).select().single()
@@ -885,6 +1083,7 @@ const addWorkout = async () => {
   }
 }
 const deleteWorkout = async (id) => {
+  if (!confirm('삭제하시겠습니까?')) return
   const { error } = await supabase.from('workouts').delete().eq('id', id)
   if (!error) workouts.value = workouts.value.filter(w => w.id !== id)
 }
@@ -892,22 +1091,44 @@ const deleteWorkout = async (id) => {
 const showEditGroup   = ref(false)
 const editGroupItems  = ref([])
 const editGroupDuration = ref(null)
+const orderSaved = ref(false)
 const showEditWorkout = ref(false)
 const editingWorkout  = ref(null)
 const openEditGroup = (group) => {
-  editGroupItems.value = group.items
+  editGroupItems.value = [...group.items]
   editGroupDuration.value = group.items.find(w => w.duration_min)?.duration_min || null
+  editOrderChanged.value = false
   showEditGroup.value = true
 }
-const saveDayDuration = async () => {
+const editOrderChanged = ref(false)
+const moveEditItem = (i, dir) => {
+  const arr = editGroupItems.value
+  const j = i + dir
+  if (j < 0 || j >= arr.length) return
+  const tmp = arr[i]; arr.splice(i, 1, arr[j]); arr.splice(j, 1, tmp)
+  editOrderChanged.value = true
+}
+
+const saveEditGroup = async () => {
   const ids = editGroupItems.value.map(w => w.id)
   const val = editGroupDuration.value ? parseInt(editGroupDuration.value) : null
-  const { error } = await supabase.from('workouts').update({ duration_min: val }).in('id', ids)
-  if (!error) {
+  const queries = [supabase.from('workouts').update({ duration_min: val }).in('id', ids)]
+  if (editOrderChanged.value) {
+    editGroupItems.value.forEach((w, i) => queries.push(supabase.from('workouts').update({ sort_order: i }).eq('id', w.id)))
+  }
+  const [durRes] = await Promise.all(queries)
+  if (!durRes.error) {
     ids.forEach(id => {
       const w = workouts.value.find(w => w.id === id)
       if (w) w.duration_min = val
     })
+    if (editOrderChanged.value) {
+      editGroupItems.value.forEach((w, i) => {
+        const wo = workouts.value.find(x => x.id === w.id)
+        if (wo) wo.sort_order = i
+      })
+    }
+    showEditGroup.value = false
   }
 }
 const openEditWorkout = (w) => {
@@ -935,6 +1156,10 @@ const editAddSetLog = () => {
 const editRemoveSetLog = (i) => {
   if (!editingWorkout.value.set_logs || editingWorkout.value.set_logs.length <= 1) return
   editingWorkout.value.set_logs.splice(i, 1)
+}
+const editToggleSetLogType = (i, type) => {
+  const s = editingWorkout.value.set_logs[i]
+  s.type = s.type === type ? 'normal' : type
 }
 const saveEditWorkout = async () => {
   if (!editingWorkout.value) return
@@ -1090,21 +1315,26 @@ const allTimePRs = computed(() => {
 
 // 부위별 주간 볼륨 차트 (최근 6주)
 const weeklyMuscleChart = computed(() => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const chartStart = new Date(year === 2026 ? `${year}-06-01` : `${year}-01-01`)
   const weeks = []
-  for (let i = 5; i >= 0; i--) {
-    const start = new Date(Date.now() - (i+1)*7*86400000)
-    const end   = new Date(Date.now() - i*7*86400000)
-    const endLabel = new Date(end.getTime() - 86400000)
-    const label = `${start.getMonth()+1}/${start.getDate()}~${endLabel.getMonth()+1}/${endLabel.getDate()}`
+  let cursor = new Date(chartStart)
+  while (cursor <= now) {
+    const weekStart = new Date(cursor)
+    const weekEnd = new Date(cursor.getTime() + 7*86400000)
+    const endLabel = new Date(weekEnd.getTime() - 86400000)
+    const label = `${weekStart.getMonth()+1}/${weekStart.getDate()}~${endLabel.getMonth()+1}/${endLabel.getDate()}`
     const weekData = {}
     MUSCLE_GROUPS.forEach(g => weekData[g] = 0)
     workouts.value
-      .filter(w => { const d = new Date(w.date); return d >= start && d < end })
+      .filter(w => { const d = new Date(w.date); return d >= weekStart && d < weekEnd })
       .forEach(w => { if (weekData[w.muscle_group] !== undefined) weekData[w.muscle_group] += calcVolume(w) || 1 })
     weeks.push({ label, data: weekData })
+    cursor = weekEnd
   }
   const maxVal = Math.max(...weeks.flatMap(w => Object.values(w.data)), 1)
-  return { weeks, maxVal }
+  return { weeks: weeks.slice(-8), maxVal }
 })
 
 const MUSCLE_COLORS = {
@@ -1258,11 +1488,34 @@ const muscleBalance = computed(() => {
   return map
 })
 const recentWeights = computed(() => weightLogs.value.slice(-12))
+const totalWorkoutDays = computed(() => new Set(workouts.value.map(w => w.date)).size)
+const thisMonthWorkoutDays = computed(() => {
+  const month = new Date().toISOString().slice(0, 7)
+  return new Set(workouts.value.filter(w => w.date.startsWith(month)).map(w => w.date)).size
+})
+const thisWeekWorkoutDays = computed(() => {
+  const now = new Date()
+  const dow = now.getDay()
+  const mon = new Date(now); mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1))
+  const monStr = mon.toISOString().slice(0, 10)
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6)
+  const sunStr = sun.toISOString().slice(0, 10)
+  return new Set(workouts.value.filter(w => w.date >= monStr && w.date <= sunStr).map(w => w.date)).size
+})
+const restDaysThisYear = computed(() => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const start = year === 2026 ? `${year}-06-01` : `${year}-01-01`
+  const today = now.toISOString().slice(0, 10)
+  const totalDays = Math.floor((new Date(today) - new Date(start)) / 86400000) + 1
+  const worked = new Set(workouts.value.filter(w => w.date >= start && w.date <= today).map(w => w.date)).size
+  return Math.max(0, totalDays - worked)
+})
 const weightPlateau = computed(() => {
   if (weightLogs.value.length < 4) return false
   const last4 = weightLogs.value.slice(-4).map(w => w.weight)
   const diff = Math.max(...last4) - Math.min(...last4)
-  return diff < 0.5
+  return diff < 2.0
 })
 const strengthByExercise = computed(() => {
   const map = {}
@@ -1272,14 +1525,85 @@ const strengthByExercise = computed(() => {
   })
   return map
 })
-const workoutsByDate = computed(() => {
+const workoutDateMap = computed(() => {
   const map = {}
   workouts.value.forEach(w => {
     if (!map[w.date]) map[w.date] = []
     map[w.date].push(w)
   })
-  return Object.keys(map).sort().reverse().slice(0, 30).map(date => ({ date, items: map[date] }))
+  Object.values(map).forEach(arr => arr.sort((a, b) => {
+    const od = (a.sort_order ?? 999) - (b.sort_order ?? 999)
+    if (od !== 0) return od
+    return new Date(a.created_at) - new Date(b.created_at)
+  }))
+  return map
 })
+
+// 달력
+const calendarMonth = ref(new Date().toISOString().slice(0, 7))
+const selectedCalendarDate = ref(null)
+const calendarLabel = computed(() => {
+  const [y, m] = calendarMonth.value.split('-')
+  return `${y}년 ${parseInt(m)}월`
+})
+const calendarDays = computed(() => {
+  const [y, m] = calendarMonth.value.split('-').map(Number)
+  const firstDow = new Date(y, m - 1, 1).getDay()
+  const daysInMonth = new Date(y, m, 0).getDate()
+  const days = []
+  for (let i = 0; i < firstDow; i++) days.push(null)
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${calendarMonth.value}-${String(d).padStart(2, '0')}`
+    days.push({ day: d, date, hasWorkout: !!workoutDateMap.value[date] })
+  }
+  return days
+})
+const prevMonth = () => {
+  const [y, m] = calendarMonth.value.split('-').map(Number)
+  const d = new Date(y, m - 2, 1)
+  calendarMonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  selectedCalendarDate.value = null
+}
+const nextMonth = () => {
+  const [y, m] = calendarMonth.value.split('-').map(Number)
+  const d = new Date(y, m, 1)
+  calendarMonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  selectedCalendarDate.value = null
+}
+const selectCalendarDate = (cell) => {
+  if (!cell?.hasWorkout) return
+  selectedCalendarDate.value = selectedCalendarDate.value === cell.date ? null : cell.date
+}
+const selectedDateGroup = computed(() => {
+  if (!selectedCalendarDate.value) return null
+  const items = workoutDateMap.value[selectedCalendarDate.value]
+  return items ? { date: selectedCalendarDate.value, items } : null
+})
+
+// 날짜 변경
+const calDateChangeIds = ref([])
+const calDateChangeTarget = ref('')
+const toggleCalDateSelect = (id) => {
+  const idx = calDateChangeIds.value.indexOf(id)
+  if (idx >= 0) calDateChangeIds.value.splice(idx, 1)
+  else calDateChangeIds.value.push(id)
+}
+const changeWorkoutDate = async () => {
+  if (!calDateChangeIds.value.length || !calDateChangeTarget.value) return
+  if (!confirm(`${calDateChangeTarget.value}로 날짜를 변경하시겠습니까?`)) return
+  const ids = [...calDateChangeIds.value]
+  const newDate = calDateChangeTarget.value
+  const { error } = await supabase.from('workouts').update({ date: newDate }).in('id', ids)
+  if (!error) {
+    ids.forEach(id => {
+      const w = workouts.value.find(x => x.id === id)
+      if (w) w.date = newDate
+    })
+    calDateChangeIds.value = []
+    calDateChangeTarget.value = ''
+    selectedCalendarDate.value = null
+  }
+}
 
 // PR 그룹 아코디언
 const expandedPRGroups = ref([])
@@ -1297,20 +1621,6 @@ const prExerciseChart = computed(() => {
   if (!selectedPRExercise.value) return []
   return (strengthByExercise.value[selectedPRExercise.value] || []).slice(-10)
 })
-
-// 날짜 아코디언
-const expandedDates = ref([])
-const toggleDate = (date) => {
-  const idx = expandedDates.value.indexOf(date)
-  if (idx >= 0) expandedDates.value.splice(idx, 1)
-  else expandedDates.value.push(date)
-}
-const isExpanded = (date) => expandedDates.value.includes(date)
-watch(workoutsByDate, (groups) => {
-  if (groups.length && !expandedDates.value.length) {
-    expandedDates.value = [groups[0].date]
-  }
-}, { immediate: true })
 
 // 주간 데이터 복사
 const showCopyPicker = ref(false)
@@ -1534,6 +1844,7 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
+
               <div class="card mt16">
                 <div class="card-title">전체 종목 ({{ stocks.length }}개)</div>
                 <!-- PC 테이블 -->
@@ -1573,6 +1884,44 @@ const scrapByStock = computed(() => {
                   <div v-if="stocks.length===0" class="empty-td">종목을 추가해보세요</div>
                 </div>
               </div>
+
+              <div class="summary-grid mt16">
+                <div class="summary-card sim-card" @click="tab='sim'" style="cursor:pointer">
+                  <div class="sc-label">🎮 모의투자</div>
+                  <div class="sc-value sm">{{ fmt(Math.round(simTotalAsset)) }}원</div>
+                  <div class="sc-sub">
+                    <span>보유 {{ simHoldings.length }}종목</span>
+                    <span class="sc-rate" :class="simOverallRate>=0?'profit':'loss'">{{ fmtRate(simOverallRate) }}</span>
+                  </div>
+                  <div class="sc-pnl" :class="simOverallPnl>=0?'profit':'loss'">{{ simOverallPnl>=0?'+':'' }}{{ fmt(Math.round(simOverallPnl)) }}원</div>
+                </div>
+              </div>
+
+              <div class="card mt16" @click="tab='sim'" style="cursor:pointer">
+                <div class="report-header">
+                  <div class="card-title" style="margin:0">🎮 모의투자</div>
+                  <div style="display:flex;gap:12px;align-items:center">
+                    <span style="font-size:13px;color:#6b7280">총 {{ fmt(Math.round(simTotalAsset)) }}원</span>
+                    <span style="font-size:13px;font-weight:700" :class="simOverallRate>=0?'profit':'loss'">{{ fmtRate(simOverallRate) }}</span>
+                  </div>
+                </div>
+                <div class="table-wrap" v-if="simHoldings.length">
+                  <table class="stock-table">
+                    <thead><tr><th>종목명</th><th>수량</th><th>평단</th><th>현재가</th><th>손익</th><th>수익률</th></tr></thead>
+                    <tbody>
+                      <tr v-for="h in simHoldings" :key="h.id">
+                        <td><div class="name-text">{{ h.name }}</div><div v-if="h.ticker" class="ticker-text">{{ h.ticker }}</div></td>
+                        <td>{{ fmt(h.quantity) }}주</td>
+                        <td>{{ fmt(h.avg_price) }}원</td>
+                        <td>{{ fmt(simCurrentPrice(h)) }}원</td>
+                        <td :class="simHoldingPnl(h)>=0?'profit':'loss'">{{ simHoldingPnl(h)>=0?'+':'' }}{{ fmt(Math.round(simHoldingPnl(h))) }}원</td>
+                        <td :class="simHoldingRate(h)>=0?'profit':'loss'">{{ fmtRate(simHoldingRate(h)) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div v-else class="empty-td">보유 종목이 없어요</div>
+              </div>
             </template>
 
             <!-- ── 장기 / 단기 ── -->
@@ -1582,12 +1931,22 @@ const scrapByStock = computed(() => {
                   <div class="sc-label">{{ tab==='long'?'📈 장기투자':'⚡ 단기투자' }} 요약</div>
                   <div class="sc-value">{{ fmt(Math.round(tab==='long'?long.value:short.value)) }}원</div>
                   <div class="sc-sub">
-                    <span>투자금 {{ fmt(Math.round(tab==='long'?long.invest:short.invest)) }}원</span>
+                    <span>미실현 투자금 {{ fmt(Math.round(tab==='long'?long.invest:short.invest)) }}원</span>
                     <span class="sc-rate" :class="isProfit(tab==='long'?long.rate:short.rate)?'profit':'loss'">{{ fmtRate(tab==='long'?long.rate:short.rate) }}</span>
                   </div>
                   <div class="sc-pnl" :class="isProfit(tab==='long'?long.pnl:short.pnl)?'profit':'loss'">
-                    {{ isProfit(tab==='long'?long.pnl:short.pnl)?'+':'' }}{{ fmt(Math.round(tab==='long'?long.pnl:short.pnl)) }}원
+                    미실현 {{ isProfit(tab==='long'?long.pnl:short.pnl)?'+':'' }}{{ fmt(Math.round(tab==='long'?long.pnl:short.pnl)) }}원
                   </div>
+                  <div class="sc-sub" style="margin-top:4px;border-top:1px solid #e5e7eb;padding-top:4px">
+                    <span style="color:#6b7280;font-size:12px">누적 (실현+미실현)</span>
+                    <span :class="isProfit(tab==='long'?longTotalPnl:shortTotalPnl)?'profit':'loss'" style="font-weight:700">
+                      {{ isProfit(tab==='long'?longTotalPnl:shortTotalPnl)?'+':'' }}{{ fmt(Math.round(tab==='long'?longTotalPnl:shortTotalPnl)) }}원
+                      ({{ fmtRate(tab==='long'?longTotalRate:shortTotalRate) }})
+                    </span>
+                  </div>
+                </div>
+                <div class="sim-actions">
+                  <button class="btn-cancel" style="font-size:13px" @click="resetStocks(tab)">초기화</button>
                 </div>
               </div>
               <div class="card mt16">
@@ -1607,7 +1966,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><div class="td-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
+                        <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
                       <tr v-if="(tab==='long'?longStocks:shortStocks).length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
@@ -1622,7 +1981,7 @@ const scrapByStock = computed(() => {
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
                     <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
                     <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
-                    <div class="ms-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
+                    <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="(tab==='long'?longStocks:shortStocks).length===0" class="empty-td">종목을 추가해보세요</div>
                 </div>
@@ -1804,6 +2163,12 @@ const scrapByStock = computed(() => {
                       {{ simTotalPnl>=0?'+':'' }}{{ fmt(Math.round(simTotalPnl)) }}원 ({{ simTotalRate>=0?'+':'' }}{{ simTotalRate.toFixed(2) }}%)
                     </span>
                   </div>
+                  <div class="sc-sub" style="margin-top:4px;border-top:1px solid #e5e7eb;padding-top:4px">
+                    <span style="color:#6b7280;font-size:12px">초기자본 1,000만원 기준 누적</span>
+                    <span :class="simOverallPnl>=0?'profit':'loss'" style="font-weight:700">
+                      {{ simOverallPnl>=0?'+':'' }}{{ fmt(Math.round(simOverallPnl)) }}원 ({{ simOverallRate>=0?'+':'' }}{{ simOverallRate.toFixed(2) }}%)
+                    </span>
+                  </div>
                 </div>
                 <div class="sim-actions">
                   <button class="btn-add-top" @click="showSimBuy=true">📈 매수</button>
@@ -1847,6 +2212,70 @@ const scrapByStock = computed(() => {
                         <td :class="t.type==='buy'?'loss':'profit'">{{ t.type==='buy'?'-':'+' }}{{ fmt(t.total) }}원</td>
                       </tr>
                       <tr v-if="simTrades.length===0"><td colspan="6" class="empty-td">거래 내역이 없어요</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="card mt16">
+                <div class="report-header">
+                  <div class="card-title" style="margin:0">자동매매 조건</div>
+                  <button class="btn-add-top" @click="showCondForm=!showCondForm">+ 조건 추가</button>
+                </div>
+                <div v-if="showCondForm" class="cond-form">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>종목명</label>
+                      <input v-model="condForm.name" class="input-field" placeholder="삼성전자"
+                        @input="searchStock(condForm.name)" @blur="() => { setTimeout(()=>searchResults.value=[],200) }" />
+                      <div v-if="searchResults.length" class="autocomplete-list">
+                        <div v-for="s in searchResults" :key="s.ticker" class="autocomplete-item"
+                          @mousedown="condForm.name=s.name; condForm.ticker=s.ticker; searchResults.value=[]">
+                          {{ s.name }} <span style="color:#9ca3af;font-size:12px">{{ s.ticker }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="form-group">
+                      <label>티커</label>
+                      <input v-model="condForm.ticker" class="input-field" placeholder="005930.KS" />
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>구분</label>
+                      <select v-model="condForm.condition_type" class="input-field">
+                        <option value="buy">매수</option>
+                        <option value="sell">매도</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label>목표가</label>
+                      <input v-model.number="condForm.target_price" type="number" class="input-field" placeholder="0" />
+                    </div>
+                    <div class="form-group">
+                      <label>수량</label>
+                      <input v-model.number="condForm.quantity" type="number" class="input-field" placeholder="0" />
+                    </div>
+                  </div>
+                  <button @click="addCondition" class="btn-primary" style="width:100%;margin-top:8px">등록</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="stock-table">
+                    <thead><tr><th>종목</th><th>구분</th><th>목표가</th><th>수량</th><th>상태</th><th></th></tr></thead>
+                    <tbody>
+                      <tr v-for="c in tradeConditions" :key="c.id">
+                        <td><div class="name-text">{{ c.name }}</div><div class="ticker-text">{{ c.ticker }}</div></td>
+                        <td><span class="type-badge" :class="c.condition_type==='buy'?'long':'short'">{{ c.condition_type==='buy'?'매수':'매도' }}</span></td>
+                        <td>{{ fmt(c.target_price) }}원</td>
+                        <td>{{ fmt(c.quantity) }}주</td>
+                        <td>
+                          <span @click="toggleCondition(c)" style="cursor:pointer;font-size:12px;font-weight:600"
+                            :style="c.active?'color:#059669':'color:#9ca3af'">
+                            {{ c.active ? '활성' : '비활성' }}
+                          </span>
+                        </td>
+                        <td><button class="btn-sm del" @click="deleteCondition(c)">삭제</button></td>
+                      </tr>
+                      <tr v-if="!tradeConditions.length"><td colspan="6" class="empty-td">등록된 조건이 없어요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -1903,11 +2332,17 @@ const scrapByStock = computed(() => {
                 <!-- 보고서 뷰어 -->
                 <template v-if="selectedReport">
                   <div class="report-viewer-header">
-                    <button @click="selectedReport=null" class="btn-back-report">← 목록</button>
+                    <button @click="selectedReport=null;editingReport=false" class="btn-back-report">← 목록</button>
                     <span class="rv-label">{{ selectedReport.period_label }}</span>
-                    <button @click="deleteReport(selectedReport.id)" class="btn-sm del">삭제</button>
+                    <div style="display:flex;gap:6px">
+                      <button v-if="!editingReport" @click="startEditReport" class="btn-sm">수정</button>
+                      <button v-if="editingReport" @click="saveEditReport" class="btn-sm" style="background:#6c47ff;color:#fff">저장</button>
+                      <button v-if="editingReport" @click="editingReport=false" class="btn-sm">취소</button>
+                      <button @click="deleteReport(selectedReport.id)" class="btn-sm del">삭제</button>
+                    </div>
                   </div>
-                  <div class="report-viewer-body">{{ selectedReport.content }}</div>
+                  <textarea v-if="editingReport" v-model="editReportContent" class="report-edit-textarea"></textarea>
+                  <div v-else class="report-viewer-body">{{ selectedReport.content }}</div>
                 </template>
 
                 <!-- 보고서 목록 -->
@@ -1970,9 +2405,6 @@ const scrapByStock = computed(() => {
                         </div>
                       </div>
                     </div>
-                    <div v-if="monthlyReport.mostImproved" class="report-prs">
-                      <span class="pr-badge">💪 {{ monthlyReport.mostImproved.ex }} +{{ monthlyReport.mostImproved.gain }}kg</span>
-                    </div>
                   </template>
 
                   <!-- 보고서 버튼들 -->
@@ -1986,41 +2418,60 @@ const scrapByStock = computed(() => {
                   </div>
 
                   <!-- 과거 보고서 목록 -->
-                  <div v-if="reports.filter(r=>r.type===reportTab).length" class="past-reports">
-                    <div class="past-reports-title">저장된 보고서</div>
-                    <div v-for="r in reports.filter(x=>x.type===reportTab)" :key="r.id"
-                      class="past-report-item" @click="selectedReport=r">
-                      <div class="pri-label">{{ r.period_label }}</div>
-                      <div class="pri-date">{{ r.created_at?.slice(0,10) }}</div>
-                      <div style="display:flex;align-items:center;gap:6px">
-                        <button @click.stop="deleteReport(r.id)" class="btn-sm del">삭제</button>
-                        <span class="pri-arrow">›</span>
-                      </div>
+                  <!-- 월간 보고서 선택 -->
+                  <template v-if="reportTab==='monthly'">
+                    <div class="report-selector">
+                      <select v-model.number="reportSelYear" class="input-field" style="flex:1" @change="reportSelMonth=reportMonths[0]||1">
+                        <option v-for="y in reportYears('monthly')" :key="y" :value="y">{{ y }}년</option>
+                      </select>
+                      <select v-model.number="reportSelMonth" class="input-field" style="flex:1">
+                        <option v-for="m in reportMonths" :key="m" :value="m">{{ m }}월</option>
+                      </select>
+                      <button v-if="foundMonthlyReport" @click="selectedReport=foundMonthlyReport" class="btn-primary" style="flex:1">보기</button>
                     </div>
-                  </div>
-                  <div v-else class="empty-td" style="padding:12px;text-align:center;font-size:13px">
-                    아직 저장된 보고서가 없어요
-                  </div>
+                    <div v-if="!foundMonthlyReport && reportMonths.length" class="empty-td" style="padding:12px;text-align:center;font-size:13px">해당 월 보고서 없음</div>
+                    <div v-if="!reportYears('monthly').length" class="empty-td" style="padding:12px;text-align:center;font-size:13px">아직 저장된 보고서가 없어요</div>
+                  </template>
+
+                  <!-- 주간 보고서 선택 -->
+                  <template v-else>
+                    <div class="report-selector">
+                      <select v-model.number="reportSelYear" class="input-field" style="flex:1" @change="reportSelWeek=''">
+                        <option v-for="y in reportYears('weekly')" :key="y" :value="y">{{ y }}년</option>
+                      </select>
+                      <select v-model="reportSelWeek" class="input-field" style="flex:2">
+                        <option value="">주 선택</option>
+                        <option v-for="r in reportWeeks" :key="r.id" :value="r.period_start">{{ r.period_label }}</option>
+                      </select>
+                      <button v-if="foundWeeklyReport" @click="selectedReport=foundWeeklyReport" class="btn-primary" style="flex:1">보기</button>
+                    </div>
+                    <div v-if="!reportYears('weekly').length" class="empty-td" style="padding:12px;text-align:center;font-size:13px">아직 저장된 보고서가 없어요</div>
+                  </template>
                 </template>
               </div>
 
               <!-- 요약 카드 -->
               <div class="summary-grid health-summary-grid">
                 <div class="summary-card total">
-                  <div class="sc-label">총 운동 기록</div>
-                  <div class="sc-value sm">{{ new Set(workouts.map(w=>w.date)).size }}회</div>
+                  <div class="sc-label">총 운동</div>
+                  <div class="sc-value sm">{{ totalWorkoutDays }}일</div>
                 </div>
                 <div class="summary-card long-card">
-                  <div class="sc-label">최근 체중</div>
-                  <div class="sc-value sm">{{ weightLogs.length ? weightLogs[weightLogs.length-1].weight + 'kg' : '-' }}</div>
-                </div>
-                <div class="summary-card" :class="weightPlateau ? 'short-card' : 'long-card'">
-                  <div class="sc-label">체중 정체기</div>
-                  <div class="sc-value sm" style="font-size:16px">{{ weightPlateau ? '⚠️ 정체기' : '✅ 변화중' }}</div>
+                  <div class="sc-label">이번 달</div>
+                  <div class="sc-value sm">{{ thisMonthWorkoutDays }}일</div>
                 </div>
                 <div class="summary-card short-card">
-                  <div class="sc-label">{{ reportTab==='weekly' ? '이번 주 운동' : '이번 달 운동' }}</div>
-                  <div class="sc-value sm">{{ reportTab==='weekly' ? weeklyReport.thisDays : monthlyReport.thisDays }}회</div>
+                  <div class="sc-label">이번 주</div>
+                  <div class="sc-value sm">{{ thisWeekWorkoutDays }}일</div>
+                </div>
+                <div class="summary-card long-card">
+                  <div class="sc-label">올해 휴식</div>
+                  <div class="sc-value sm">{{ restDaysThisYear }}일</div>
+                </div>
+                <div class="summary-card" :class="weightPlateau ? 'short-card' : 'long-card'">
+                  <div class="sc-label">최근 체중</div>
+                  <div class="sc-value sm">{{ weightLogs.length ? weightLogs[weightLogs.length-1].weight + 'kg' : '-' }}</div>
+                  <div style="font-size:12px;opacity:0.9;margin-top:4px">{{ weightPlateau ? '⚠️ 정체기' : '✅ 변화중' }}</div>
                 </div>
               </div>
 
@@ -2038,44 +2489,64 @@ const scrapByStock = computed(() => {
                     <button @click="showAddWorkout=true" class="btn-add-top">+ 1개</button>
                   </div>
                 </div>
-                <div class="workout-log-list">
-                  <div v-for="group in workoutsByDate" :key="group.date" class="wl-date-group">
-                    <div class="wl-date-header" @click="toggleDate(group.date)">
-                      <span>{{ group.date }}</span>
-                      <span class="wl-date-meta" style="display:flex;align-items:center;gap:6px">
-                        {{ group.items.length }}개
-                        <template v-if="group.items.find(w=>w.duration_min)">· {{ group.items.find(w=>w.duration_min).duration_min }}분</template>
-                        · {{ isExpanded(group.date) ? '▲' : '▼' }}
-                        <button @click.stop="openEditGroup(group)" class="btn-sm" style="font-size:11px;padding:2px 7px">수정</button>
-                      </span>
-                    </div>
-                    <template v-if="isExpanded(group.date)">
-                      <div v-for="w in group.items" :key="w.id" class="wl-item">
-                        <div class="wl-header">
-                          <div class="wl-left">
-                            <span v-if="w.set_type==='superset'" class="tag-superset">슈퍼세트</span>
-                            <span v-if="w.set_type==='dropset'" class="tag-dropset">드롭세트</span>
-                            <span class="wl-group">{{ w.muscle_group }}</span>
-                          </div>
-                          <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
-                        </div>
-                        <div class="wl-name">{{ w.exercise }}</div>
-                        <div class="wl-sets">
-                          <template v-if="w.set_logs?.length">
-                            <span v-for="(s, si) in w.set_logs" :key="si"
-                              :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
-                              {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
-                            </span>
-                          </template>
-                          <template v-else>
-                            <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
-                          </template>
-                        </div>
-                      </div>
-                    </template>
-                  </div>
-                  <div v-if="!workouts.length" class="empty-td" style="padding:16px;text-align:center">운동을 기록해보세요</div>
+                <!-- 달력 -->
+                <div class="cal-nav">
+                  <button @click="prevMonth" class="btn-sm" style="font-size:16px;padding:2px 10px">‹</button>
+                  <span class="cal-month-label">{{ calendarLabel }}</span>
+                  <button @click="nextMonth" class="btn-sm" style="font-size:16px;padding:2px 10px">›</button>
                 </div>
+                <div class="cal-grid">
+                  <div v-for="d in ['일','월','화','수','목','금','토']" :key="d" class="cal-dow">{{ d }}</div>
+                  <template v-for="(cell, i) in calendarDays" :key="i">
+                    <div v-if="!cell" class="cal-cell"></div>
+                    <div v-else
+                      :class="['cal-cell', cell.hasWorkout && 'has-workout', selectedCalendarDate === cell.date && 'selected']"
+                      @click="selectCalendarDate(cell)">
+                      {{ cell.day }}
+                    </div>
+                  </template>
+                </div>
+                <!-- 선택 날짜 기록 -->
+                <template v-if="selectedDateGroup">
+                  <div class="cal-detail-header">
+                    <span>{{ selectedCalendarDate }}
+                      <template v-if="selectedDateGroup.items.find(w=>w.duration_min)"> · {{ selectedDateGroup.items.find(w=>w.duration_min).duration_min }}분</template>
+                    </span>
+                    <button @click.stop="openEditGroup(selectedDateGroup)" class="btn-sm" style="font-size:11px;padding:2px 7px">수정</button>
+                  </div>
+                  <div v-if="calDateChangeIds.length" class="cal-date-change-bar">
+                    <input type="date" v-model="calDateChangeTarget" style="border:1px solid #ccc;border-radius:6px;padding:3px 6px;font-size:13px" />
+                    <button @click="changeWorkoutDate" class="btn-sm" style="background:#6c47ff;color:#fff">날짜 변경</button>
+                    <button @click="calDateChangeIds=[]" class="btn-sm">취소</button>
+                  </div>
+                  <template v-for="(w, wi) in selectedDateGroup.items" :key="w.id">
+                    <hr v-if="wi>0" class="wl-divider" />
+                  <div class="wl-item">
+                    <div class="wl-header">
+                      <div class="wl-left" style="display:flex;align-items:center;gap:6px">
+                        <input type="checkbox" :checked="calDateChangeIds.includes(w.id)" @change="toggleCalDateSelect(w.id)" style="cursor:pointer;width:15px;height:15px" />
+                        <span v-if="w.set_type==='superset' || w.superset_group" class="tag-superset">슈퍼세트</span>
+                        <span v-if="w.set_type==='dropset' || w.set_logs?.some(s=>s.type==='dropset')" class="tag-dropset">드롭세트</span>
+                        <span class="wl-group">{{ w.muscle_group }}</span>
+                      </div>
+                      <button @click="deleteWorkout(w.id)" class="btn-sm del">삭제</button>
+                    </div>
+                    <div class="wl-name">{{ w.exercise }}</div>
+                    <div class="wl-sets">
+                      <template v-if="w.set_logs?.length">
+                        <span v-for="(s, si) in w.set_logs" :key="si"
+                          :class="['set-chip', s.type==='dropset'&&'chip-drop', s.type==='failure'&&'chip-fail']">
+                          {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
+                        </span>
+                      </template>
+                      <template v-else>
+                        <span class="set-chip">{{ w.sets }}세트 × {{ w.reps }}회 / {{ w.weight }}kg</span>
+                      </template>
+                    </div>
+                  </div>
+                  </template>
+                </template>
+                <div v-if="!workouts.length" class="empty-td" style="padding:16px;text-align:center">운동을 기록해보세요</div>
               </div>
 
               <!-- 부위별 주간 볼륨 + 총 횟수 -->
@@ -2133,19 +2604,6 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
 
-              <!-- 주간 운동량 -->
-              <div class="card mt16">
-                <div class="card-title">주간 운동량 (최근 8주)</div>
-                <div class="weekly-chart">
-                  <div v-for="w in weeklyVolume" :key="w.label" class="wc-col">
-                    <div class="wc-bar-wrap">
-                      <div class="wc-bar" :style="{ height: (w.cnt / Math.max(...weeklyVolume.map(x=>x.cnt), 1) * 100) + '%' }"></div>
-                    </div>
-                    <div class="wc-cnt">{{ w.cnt }}</div>
-                    <div class="wc-label">{{ w.label }}</div>
-                  </div>
-                </div>
-              </div>
 
               <!-- 체중 기록 + 그래프 -->
               <div class="card mt16">
@@ -2239,8 +2697,8 @@ const scrapByStock = computed(() => {
 
           <!-- 운동 + 세트 입력 -->
           <div class="batch-entry-box">
-            <!-- 부위 / 종목 -->
-            <div class="form-row">
+            <!-- 부위 / 종목 / 즐겨찾기 -->
+            <div class="form-row three-col">
               <div class="form-group">
                 <label>부위</label>
                 <select v-model="batchEntry.muscle_group" class="input-field" @change="batchEntry.exercise='';batchEntry.customExercise=''">
@@ -2251,12 +2709,44 @@ const scrapByStock = computed(() => {
                 <label>종목</label>
                 <select v-model="batchEntry.exercise" class="input-field">
                   <option value="" disabled>선택</option>
-                  <option v-for="ex in EXERCISE_DB[batchEntry.muscle_group] || []" :key="ex" :value="ex">{{ ex }}</option>
+                  <optgroup v-if="exerciseRecentFor(batchEntry.muscle_group).length" label="🕐 최근 사용">
+                    <option v-for="ex in exerciseRecentFor(batchEntry.muscle_group)" :key="'rec-'+ex" :value="ex">{{ ex }}</option>
+                  </optgroup>
+                  <optgroup label="전체">
+                    <option v-for="ex in exerciseRestFor(batchEntry.muscle_group)" :key="'all-'+ex" :value="ex">{{ ex }}</option>
+                  </optgroup>
                   <option value="__custom__">직접 입력...</option>
                 </select>
-                <input v-if="batchEntry.exercise==='__custom__'" v-model="batchEntry.customExercise" class="input-field" style="margin-top:6px" placeholder="운동 이름" />
+              </div>
+              <div class="form-group">
+                <label>즐겨찾기 <button v-if="batchEntry.exercise && batchEntry.exercise!=='__custom__'" @click="toggleFavorite(batchEntry.exercise)" class="fav-label-btn" :class="isFavorite(batchEntry.exercise)&&'fav-on'">★</button></label>
+                <select class="input-field" @change="e => { batchEntry.exercise = e.target.value; e.target.value = '' }">
+                  <option value="">선택</option>
+                  <option v-for="ex in exerciseFavsFor(batchEntry.muscle_group)" :key="ex" :value="ex">{{ ex }}</option>
+                </select>
               </div>
             </div>
+            <input v-if="batchEntry.exercise==='__custom__'" v-model="batchEntry.customExercise" class="input-field" style="margin-bottom:6px" placeholder="운동 이름" />
+            <!-- 이전 기록 -->
+            <template v-if="batchEntry.exercise && batchEntry.exercise !== '__custom__' && lastWorkoutOf(batchEntry.exercise)">
+              <button @click="showPrevRecord=!showPrevRecord" class="btn-prev-record">
+                {{ showPrevRecord ? '▲ 이전 기록 닫기' : '▼ 이전 기록 확인' }}
+              </button>
+              <div v-if="showPrevRecord" class="prev-record-box">
+                <div class="prev-record-date">{{ lastWorkoutOf(batchEntry.exercise).date }}</div>
+                <div class="prev-record-sets">
+                  <template v-if="lastWorkoutOf(batchEntry.exercise).set_logs?.length">
+                    <span v-for="(s, i) in lastWorkoutOf(batchEntry.exercise).set_logs" :key="i" class="set-chip">
+                      {{ s.weight }}kg × {{ s.reps }}{{ s.type==='failure' ? ' (실패)' : '' }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    <span class="set-chip">{{ lastWorkoutOf(batchEntry.exercise).sets }}세트 × {{ lastWorkoutOf(batchEntry.exercise).reps }}회 / {{ lastWorkoutOf(batchEntry.exercise).weight }}kg</span>
+                  </template>
+                </div>
+                <button @click="loadPrevRecord(lastWorkoutOf(batchEntry.exercise))" class="btn-primary" style="width:100%;margin-top:8px;font-size:13px">불러오기</button>
+              </div>
+            </template>
 
             <!-- 세트별 입력 -->
             <div class="set-logs-header">
@@ -2266,8 +2756,16 @@ const scrapByStock = computed(() => {
               <span class="set-num-badge" :class="s.type==='dropset'?'badge-drop':s.type==='failure'?'badge-fail':''">
                 {{ s.type==='dropset' ? '↓' : s.type==='failure' ? 'F' : i+1 }}
               </span>
-              <input v-model.number="s.weight" type="number" class="set-mini-input" placeholder="0" />
-              <input v-model.number="s.reps"   type="number" class="set-mini-input" placeholder="0" />
+              <div class="set-stepper">
+                <button @click="s.weight = Math.max(0, parseFloat((s.weight - 2.5).toFixed(1)))" class="step-btn">-</button>
+                <input v-model.number="s.weight" type="number" class="set-mini-input" placeholder="0" />
+                <button @click="s.weight = parseFloat((s.weight + 2.5).toFixed(1))" class="step-btn">+</button>
+              </div>
+              <div class="set-stepper">
+                <button @click="s.reps = Math.max(0, s.reps - 1)" class="step-btn">-</button>
+                <input v-model.number="s.reps" type="number" class="set-mini-input" placeholder="0" />
+                <button @click="s.reps++" class="step-btn">+</button>
+              </div>
               <button :class="['fail-btn', s.type==='failure'&&'fail-on']" @click="toggleFailure(i)">●</button>
               <button @click="removeSetLog(i)" class="btn-sm del" style="padding:2px 6px">✕</button>
             </div>
@@ -2290,8 +2788,8 @@ const scrapByStock = computed(() => {
             <div v-for="(item, i) in batchItems" :key="i" :class="['batch-item', item.set_type==='superset'&&'batch-superset']">
               <div class="bi-info">
                 <div style="display:flex;align-items:center;gap:6px">
-                  <span v-if="item.set_type==='superset'" class="tag-superset">슈퍼세트</span>
-                  <span v-if="item.set_type==='dropset'" class="tag-dropset">드롭세트</span>
+                  <span v-if="item.set_type==='superset' || item.superset_group" class="tag-superset">슈퍼세트</span>
+                  <span v-if="item.set_type==='dropset' || item.set_logs?.some(s=>s.type==='dropset')" class="tag-dropset">드롭세트</span>
                   <span class="bi-group">{{ item.muscle_group }}</span>
                 </div>
                 <span class="bi-name">{{ item.exercise }}</span>
@@ -2367,19 +2865,47 @@ const scrapByStock = computed(() => {
               </select>
             </div>
           </div>
-          <div class="form-group">
-            <label>운동 종목</label>
-            <select v-model="newWorkout.exercise" class="input-field">
-              <option value="" disabled>종목 선택</option>
-              <option v-for="ex in EXERCISE_DB[newWorkout.muscle_group] || []" :key="ex" :value="ex">{{ ex }}</option>
-              <option value="__custom__">직접 입력...</option>
-            </select>
-            <input v-if="newWorkout.exercise === '__custom__'" v-model="newWorkout.customExercise" class="input-field" style="margin-top:6px" placeholder="운동 이름 직접 입력" />
+          <div class="form-row three-col">
+            <div class="form-group">
+              <label>종목</label>
+              <select v-model="newWorkout.exercise" class="input-field">
+                <option value="" disabled>선택</option>
+                <optgroup v-if="exerciseRecentFor(newWorkout.muscle_group).length" label="🕐 최근 사용">
+                  <option v-for="ex in exerciseRecentFor(newWorkout.muscle_group)" :key="'rec-'+ex" :value="ex">{{ ex }}</option>
+                </optgroup>
+                <optgroup label="전체">
+                  <option v-for="ex in exerciseRestFor(newWorkout.muscle_group)" :key="'all-'+ex" :value="ex">{{ ex }}</option>
+                </optgroup>
+                <option value="__custom__">직접 입력...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>즐겨찾기 <button v-if="newWorkout.exercise && newWorkout.exercise!=='__custom__'" @click="toggleFavorite(newWorkout.exercise)" class="fav-label-btn" :class="isFavorite(newWorkout.exercise)&&'fav-on'">★</button></label>
+              <select class="input-field" @change="e => { newWorkout.exercise = e.target.value; e.target.value = '' }">
+                <option value="">선택</option>
+                <option v-for="ex in exerciseFavsFor(newWorkout.muscle_group)" :key="ex" :value="ex">{{ ex }}</option>
+              </select>
+            </div>
           </div>
+          <input v-if="newWorkout.exercise === '__custom__'" v-model="newWorkout.customExercise" class="input-field" style="margin-bottom:6px" placeholder="운동 이름 직접 입력" />
           <div class="form-row">
             <div class="form-group"><label>세트</label><input v-model.number="newWorkout.sets" type="number" class="input-field" /></div>
-            <div class="form-group"><label>횟수</label><input v-model.number="newWorkout.reps" type="number" class="input-field" /></div>
-            <div class="form-group"><label>무게 (kg)</label><input v-model.number="newWorkout.weight" type="number" class="input-field" /></div>
+            <div class="form-group">
+              <label>횟수</label>
+              <div class="set-stepper">
+                <button @click="newWorkout.reps = Math.max(0, newWorkout.reps - 1)" class="step-btn">-</button>
+                <input v-model.number="newWorkout.reps" type="number" class="input-field" style="text-align:center" />
+                <button @click="newWorkout.reps++" class="step-btn">+</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>무게 (kg)</label>
+              <div class="set-stepper">
+                <button @click="newWorkout.weight = Math.max(0, parseFloat((newWorkout.weight - 2.5).toFixed(1)))" class="step-btn">-</button>
+                <input v-model.number="newWorkout.weight" type="number" class="input-field" style="text-align:center" />
+                <button @click="newWorkout.weight = parseFloat((newWorkout.weight + 2.5).toFixed(1))" class="step-btn">+</button>
+              </div>
+            </div>
           </div>
           <div class="form-group"><label>메모</label><input v-model="newWorkout.memo" class="input-field" placeholder="컨디션, 느낀점 등" /></div>
           <div class="modal-btns">
@@ -2395,20 +2921,25 @@ const scrapByStock = computed(() => {
           <h3>{{ editGroupItems[0]?.date }} 수정</h3>
           <div class="form-row" style="margin-bottom:14px;align-items:flex-end">
             <div class="form-group" style="flex:1"><label>총 운동 시간(분)</label><input v-model.number="editGroupDuration" type="number" min="1" max="300" class="input-field" placeholder="예: 60" /></div>
-            <button @click="saveDayDuration" class="btn-primary" style="height:38px;margin-bottom:0">저장</button>
           </div>
-          <div style="font-size:12px;color:#888;margin-bottom:8px">종목 수정</div>
+          <div style="font-size:12px;color:#888;margin-bottom:8px">종목 수정 / 순서 조정</div>
           <div style="display:flex;flex-direction:column;gap:8px">
-            <div v-for="w in editGroupItems" :key="w.id"
-              @click="openEditWorkout(w)"
-              style="padding:10px 14px;border:1px solid #e5e7eb;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center"
-              onmouseover="this.style.background='#f3f4f6'" onmouseout="this.style.background=''">
-              <span><span style="font-size:11px;color:#888;margin-right:6px">{{ w.muscle_group }}</span>{{ w.exercise }}</span>
-              <span style="font-size:12px;color:#888">{{ w.weight }}kg</span>
+            <div v-for="(w, i) in editGroupItems" :key="w.id"
+              style="padding:10px 14px;border:1px solid #e5e7eb;border-radius:10px;display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;flex-direction:column;gap:2px;cursor:pointer;flex:1" @click="openEditWorkout(w)">
+                <span style="font-size:11px;color:#888">{{ w.muscle_group }}</span>
+                <span style="font-size:13px;font-weight:600">{{ w.exercise }}</span>
+                <span style="font-size:11px;color:#aaa">{{ w.weight }}kg</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:4px;margin-left:8px">
+                <button @click="moveEditItem(i, -1)" :disabled="i===0" class="btn-sm" style="padding:1px 8px;font-size:13px">↑</button>
+                <button @click="moveEditItem(i, 1)" :disabled="i===editGroupItems.length-1" class="btn-sm" style="padding:1px 8px;font-size:13px">↓</button>
+              </div>
             </div>
           </div>
           <div class="modal-btns" style="margin-top:14px">
             <button @click="showEditGroup=false" class="btn-cancel">닫기</button>
+            <button @click="saveEditGroup" class="btn-primary">저장</button>
           </div>
         </div>
       </div>
@@ -2428,17 +2959,28 @@ const scrapByStock = computed(() => {
           </div>
           <div class="form-group"><label>운동 종목</label><input v-model="editingWorkout.exercise" class="input-field" /></div>
 
+          <!-- 세트 타입 -->
+          <div class="form-group" style="margin-bottom:10px">
+            <label>세트 타입</label>
+            <div style="display:flex;gap:6px">
+              <button v-for="t in [{v:'normal',l:'일반'},{v:'superset',l:'슈퍼세트'},{v:'dropset',l:'드롭세트'}]" :key="t.v"
+                :class="['btn-sm', editingWorkout.set_type===t.v && 'btn-sm-active']"
+                @click="editingWorkout.set_type=t.v">{{ t.l }}</button>
+            </div>
+          </div>
+
           <!-- 세트별 기록이 있으면 세트별로, 없으면 합산 -->
           <template v-if="editingWorkout.set_logs?.length">
             <label style="font-size:13px;font-weight:600;margin-bottom:6px;display:block">세트별 기록</label>
             <div v-for="(s, si) in editingWorkout.set_logs" :key="si"
-              style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-              <span style="font-size:12px;color:#888;width:24px">{{ si+1 }}.</span>
-              <input v-model.number="s.weight" type="number" class="input-field" style="width:80px" placeholder="kg" />
-              <span style="font-size:12px;color:#888">kg ×</span>
-              <input v-model.number="s.reps" type="number" class="input-field" style="width:70px" placeholder="횟수" />
-              <span style="font-size:12px;color:#888">회</span>
-              <button @click="editRemoveSetLog(si)" class="btn-sm del" style="padding:2px 8px">−</button>
+              style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+              <span style="font-size:12px;color:#888;width:20px">{{ si+1 }}.</span>
+              <input v-model.number="s.weight" type="number" class="input-field" style="width:72px" placeholder="kg" />
+              <span style="font-size:12px;color:#888">×</span>
+              <input v-model.number="s.reps" type="number" class="input-field" style="width:62px" placeholder="횟수" />
+              <button :class="['fail-btn', s.type==='dropset'&&'fail-on']" @click="editToggleSetLogType(si,'dropset')" style="font-size:10px;padding:0 5px">드</button>
+              <button :class="['fail-btn', s.type==='failure'&&'fail-on']" @click="editToggleSetLogType(si,'failure')" style="font-size:10px;padding:0 5px">실</button>
+              <button @click="editRemoveSetLog(si)" class="btn-sm del" style="padding:2px 6px">✕</button>
             </div>
             <button @click="editAddSetLog" class="btn-sm" style="margin-top:2px;margin-bottom:10px">+ 세트 추가</button>
           </template>
@@ -2502,6 +3044,35 @@ const scrapByStock = computed(() => {
       </div>
 
       <!-- 매도 모달 -->
+      <div v-if="stockSellTarget" class="modal-overlay" @click.self="stockSellTarget=null">
+        <div class="modal">
+          <h3>📉 매도 — {{ stockSellTarget.name }}</h3>
+          <div class="sim-calc" style="margin-bottom:16px">
+            보유 수량: <b>{{ stockSellTarget.quantity }}주</b> &nbsp;|&nbsp; 평균단가: <b>{{ fmt(stockSellTarget.avg_price) }}원</b>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>수량 (주) *</label>
+              <input v-model.number="stockSellForm.quantity" type="number" :max="stockSellTarget.quantity" class="input-field" />
+            </div>
+            <div class="form-group">
+              <label>가격 (원) *</label>
+              <input v-model.number="stockSellForm.price" type="number" class="input-field" />
+            </div>
+          </div>
+          <div v-if="stockSellForm.quantity && stockSellForm.price" class="sim-calc">
+            매도금액: <b>{{ fmt(stockSellForm.quantity * stockSellForm.price) }}원</b> &nbsp;|&nbsp;
+            손익: <b :class="(stockSellForm.price-stockSellTarget.avg_price)*stockSellForm.quantity>=0?'profit':'loss'">
+              {{ (stockSellForm.price-stockSellTarget.avg_price)*stockSellForm.quantity>=0?'+':'' }}{{ fmt(Math.round((stockSellForm.price-stockSellTarget.avg_price)*stockSellForm.quantity)) }}원
+            </b>
+          </div>
+          <div class="modal-btns">
+            <button @click="stockSellTarget=null" class="btn-cancel">취소</button>
+            <button @click="stockSell" class="btn-primary" style="background:#ef4444">매도</button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="simSellTarget" class="modal-overlay" @click.self="simSellTarget=null">
         <div class="modal">
           <h3>📉 매도 — {{ simSellTarget.name }}</h3>
@@ -2685,7 +3256,12 @@ const scrapByStock = computed(() => {
 .toast.visible { opacity:1; }
 
 .summary-grid { display:grid; grid-template-columns:1.5fr 1fr 1fr; gap:16px; }
-.health-summary-grid { grid-template-columns:repeat(4,1fr); gap:8px; }
+.health-summary-grid { grid-template-columns:repeat(5,1fr); gap:8px; }
+.ws-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+.ws-item { background:#f4f3ff; border-radius:10px; padding:10px 12px; }
+.ws-label { font-size:11px; color:#9d7bea; font-weight:600; margin-bottom:4px; }
+.ws-val { font-size:20px; font-weight:800; color:#1a1a3a; }
+.ws-unit { font-size:12px; font-weight:500; color:#888; margin-left:2px; }
 .summary-card { border-radius:16px; padding:20px 24px; color:white; }
 .summary-card.total      { background:linear-gradient(135deg,#1d4ed8,#2563eb); }
 .summary-card.long-card  { background:linear-gradient(135deg,#0891b2,#0284c7); transition:0.15s; }
@@ -2846,10 +3422,7 @@ const scrapByStock = computed(() => {
 .mc-cnt { font-size:13px; font-weight:700; color:#1a1a3a; }
 .btn-gen-report { width:100%; background:#6c47ff; color:#fff; border:none; border-radius:10px; padding:10px; font-size:14px; cursor:pointer; margin-top:12px; }
 .btn-gen-report:disabled { opacity:0.6; cursor:default; }
-.past-reports { margin-top:14px; display:flex; flex-direction:column; gap:6px; }
-.past-reports-title { font-size:12px; color:#888; margin-bottom:4px; }
-.past-report-item { display:flex; align-items:center; justify-content:space-between; background:#f5f5ff; border-radius:10px; padding:12px 14px; cursor:pointer; }
-.past-report-item:hover { background:#ebebff; }
+.report-selector { display:flex; gap:6px; margin-top:12px; align-items:center; }
 .pri-label { font-size:14px; font-weight:600; color:#1a1a3a; }
 .pri-date { font-size:12px; color:#888; margin-left:auto; margin-right:8px; }
 .pri-arrow { color:#6c47ff; font-size:18px; }
@@ -2857,6 +3430,7 @@ const scrapByStock = computed(() => {
 .btn-back-report { background:none; border:1px solid #d0d0e8; border-radius:20px; padding:4px 12px; font-size:13px; color:#555; cursor:pointer; }
 .rv-label { font-size:14px; font-weight:600; color:#1a1a3a; }
 .report-viewer-body { white-space:pre-wrap; font-size:14px; line-height:1.8; color:#333; background:#f8f8ff; border-radius:10px; padding:16px; min-height:200px; }
+.report-edit-textarea { width:100%; min-height:300px; font-size:14px; line-height:1.8; border:1px solid #c4b5ff; border-radius:10px; padding:16px; box-sizing:border-box; resize:vertical; }
 .alert-card { background:#3a1a1a; border:1px solid #ef4444; border-radius:10px; padding:12px 16px; color:#fca5a5; font-size:13px; }
 .batch-modal { max-height:90vh; overflow-y:auto; }
 .batch-entry-box { background:#f8f8ff; border-radius:10px; padding:14px; margin-bottom:12px; }
@@ -2871,6 +3445,14 @@ const scrapByStock = computed(() => {
 .superset-toggle { padding:6px 14px; border-radius:20px; border:1px solid #d0d0e8; background:#f0f0fa; color:#888; cursor:pointer; font-size:13px; }
 .superset-on { background:#f59e0b; border-color:#f59e0b; color:#fff; }
 .set-logs-header { display:grid; grid-template-columns:28px 1fr 1fr 32px 28px; gap:4px; font-size:11px; color:#888; margin-bottom:4px; text-align:center; }
+.set-stepper { display:flex; align-items:center; gap:2px; }
+.set-stepper .set-mini-input { flex:1; min-width:0; }
+.set-stepper .input-field { flex:1; min-width:0; }
+.step-btn { flex-shrink:0; width:24px; height:28px; background:#ede8ff; border:none; border-radius:5px; font-size:14px; font-weight:700; color:#6c47ff; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+.step-btn:active { background:#d4c8ff; }
+.three-col { grid-template-columns: repeat(3, 1fr) !important; }
+.fav-label-btn { background:none; border:none; font-size:14px; color:#ccc; cursor:pointer; padding:0 2px; vertical-align:middle; }
+.fav-label-btn.fav-on { color:#f5a623; }
 .set-log-row { display:grid; grid-template-columns:28px 1fr 1fr 32px 28px; gap:4px; align-items:center; margin-bottom:4px; border-radius:6px; padding:2px 0; }
 .row-drop { background:#fff7ed; }
 .row-fail { background:#fef2f2; }
@@ -2880,6 +3462,7 @@ const scrapByStock = computed(() => {
 .set-mini-input { width:100%; border:1px solid #d0d0e8; border-radius:6px; padding:4px 6px; font-size:13px; text-align:center; }
 .fail-btn { width:28px; height:28px; border-radius:50%; border:2px solid #d0d0e8; background:#fff; color:#ccc; cursor:pointer; font-size:14px; line-height:1; }
 .fail-on { border-color:#ef4444; color:#ef4444; background:#fef2f2; }
+.btn-sm-active { background:#6c47ff; color:#fff; border-color:#6c47ff; }
 .set-add-row { display:flex; gap:6px; margin-top:8px; }
 .set-add-btn { flex:1; padding:6px; border-radius:8px; border:1px dashed #d0d0e8; background:#f8f8ff; color:#555; cursor:pointer; font-size:12px; }
 .set-add-btn.drop { border-color:#f59e0b; color:#d97706; background:#fffbeb; }
@@ -2890,12 +3473,25 @@ const scrapByStock = computed(() => {
 .tag-dropset { background:#fff7ed; color:#c2410c; border-radius:20px; padding:2px 8px; font-size:11px; font-weight:600; }
 .workout-log-list { display:flex; flex-direction:column; gap:8px; }
 .wl-item { background:#f8f8ff; border-radius:10px; padding:10px 12px; }
+.wl-divider { border:none; border-top:1px solid #e0e0f0; margin:6px 0; }
+.cal-date-change-bar { display:flex; align-items:center; gap:8px; padding:8px 0; flex-wrap:wrap; }
 .wl-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
 .wl-left { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.wl-date-group { margin-bottom:12px; }
-.wl-date-header { font-size:13px; font-weight:700; color:#6c47ff; padding:8px 10px; border-radius:10px; background:#ede9ff; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
-.wl-date-header:active { opacity:0.8; }
+.cal-nav { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.cal-month-label { font-size:15px; font-weight:800; color:#4a2fb8; }
+.cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-bottom:12px; }
+.cal-dow { text-align:center; font-size:11px; color:#9d7bea; font-weight:600; padding:4px 0; }
+.cal-cell { text-align:center; padding:7px 0; border-radius:8px; font-size:13px; color:#bbb; min-height:32px; display:flex; align-items:center; justify-content:center; }
+.cal-cell.has-workout { background:#6c47ff; color:#fff; font-weight:700; cursor:pointer; }
+.cal-cell.has-workout:active { opacity:0.8; }
+.cal-cell.selected { background:#3d1fa8; color:#fff; }
+.cal-detail-header { display:flex; justify-content:space-between; align-items:center; font-size:13px; font-weight:700; color:#6c47ff; padding:8px 10px; border-radius:10px; background:#ede9ff; margin-bottom:8px; }
 .wl-date-meta { font-size:12px; font-weight:500; color:#9d7bea; }
+.btn-prev-record { width:100%; margin-top:6px; padding:6px; border-radius:8px; background:#f0edff; color:#6c47ff; font-size:12px; font-weight:600; border:none; cursor:pointer; }
+.btn-prev-record:active { opacity:0.8; }
+.prev-record-box { background:#f7f5ff; border-radius:10px; padding:10px 12px; margin-top:6px; }
+.prev-record-date { font-size:11px; color:#9d7bea; font-weight:600; margin-bottom:6px; }
+.prev-record-sets { display:flex; flex-wrap:wrap; gap:4px; }
 .week-pick-btn { width:100%; padding:14px; border:1.5px solid #ede9ff; border-radius:12px; background:white; font-size:15px; color:#333; cursor:pointer; text-align:left; }
 .week-pick-btn:active { background:#ede9ff; }
 .wl-date { font-size:11px; color:#888; }
@@ -2924,7 +3520,7 @@ const scrapByStock = computed(() => {
 .ex-date { font-size:10px; color:#888; }
 
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px; }
-.modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow:visible; }
+.modal { background:white; border-radius:20px; padding:28px; width:100%; max-width:640px; max-height:90vh; overflow-y:auto; }
 .modal-inner { max-height:calc(90vh - 56px); overflow-y:auto; }
 .modal h3 { font-size:18px; font-weight:700; color:#1e3a8a; margin-bottom:20px; }
 .form-row { display:flex; gap:16px; margin-bottom:16px; }
@@ -2954,6 +3550,12 @@ const scrapByStock = computed(() => {
 .loss   { color:#2563eb; }
 
 .sim-header { display:flex; align-items:stretch; gap:16px; }
+.cond-form { background:#f8f7ff; border-radius:10px; padding:14px; margin:12px 0; }
+.sim-card { background:linear-gradient(135deg,#1e3a5f,#2d6a4f) !important; color:#fff !important; }
+.sim-card .sc-label { color:rgba(255,255,255,0.8) !important; }
+.sim-card .sc-value { color:#fff !important; }
+.sim-card .sc-sub span { color:rgba(255,255,255,0.75) !important; }
+.sim-card .sc-pnl { color:#fff !important; }
 .sim-actions { display:flex; flex-direction:column; gap:8px; justify-content:center; }
 .sim-calc { padding:10px 14px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; font-size:13px; color:#0369a1; margin-bottom:4px; }
 .side-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:49; }
@@ -2965,6 +3567,7 @@ const scrapByStock = computed(() => {
   .hamburger { display:block; }
   .summary-grid { grid-template-columns:1fr; gap:8px; }
   .health-summary-grid { grid-template-columns:repeat(2,1fr); }
+  .ws-grid { grid-template-columns:repeat(3,1fr); }
   .chart-grid { grid-template-columns:1fr; }
   .form-row { flex-direction:column; }
   .top-actions { gap:6px; }
@@ -3005,6 +3608,16 @@ const scrapByStock = computed(() => {
   /* 모달 */
   .modal { padding:20px 16px; }
   .modal h3 { font-size:16px; margin-bottom:14px; }
+
+  /* 달력 */
+  .cal-cell { padding:5px 0; font-size:12px; min-height:28px; border-radius:6px; }
+  .cal-month-label { font-size:14px; }
+
+  /* 운동 통계 */
+  .health-summary-grid { grid-template-columns:repeat(3,1fr); }
+
+  /* 이전 기록 */
+  .prev-record-box { padding:8px 10px; }
 
   /* 사이드바 요약 */
   .ss-value { font-size:15px; }
