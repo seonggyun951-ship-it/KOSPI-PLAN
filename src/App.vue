@@ -3372,12 +3372,12 @@ const scrapByStock = computed(() => {
 .ws-label { font-size:11px; color:#9d7bea; font-weight:600; margin-bottom:4px; }
 .ws-val { font-size:20px; font-weight:800; color:#1a1a3a; }
 .ws-unit { font-size:12px; font-weight:500; color:#888; margin-left:2px; }
-.summary-card { border-radius:16px; padding:20px 24px; color:white; }
-.summary-card.total      { background:linear-gradient(135deg,#1d4ed8,#2563eb); }
-.summary-card.long-card  { background:linear-gradient(135deg,#0891b2,#0284c7); transition:0.15s; }
-.summary-card.long-card:hover  { transform:translateY(-2px); }
-.summary-card.short-card { background:linear-gradient(135deg,#7c3aed,#6d28d9); transition:0.15s; }
-.summary-card.short-card:hover { transform:translateY(-2px); }
+.summary-card { border-radius:16px; padding:20px 24px; color:white; box-shadow:0 8px 24px rgba(0,0,0,0.18); }
+.summary-card.total      { background:linear-gradient(135deg,#0c1445,#1e40af); }
+.summary-card.long-card  { background:linear-gradient(135deg,#052e16,#166534); transition:0.15s; }
+.summary-card.long-card:hover  { transform:translateY(-2px); box-shadow:0 12px 28px rgba(0,0,0,0.25); }
+.summary-card.short-card { background:linear-gradient(135deg,#3b0764,#7e22ce); transition:0.15s; }
+.summary-card.short-card:hover { transform:translateY(-2px); box-shadow:0 12px 28px rgba(0,0,0,0.25); }
 .sc-label { font-size:13px; opacity:0.8; margin-bottom:8px; }
 .sc-value { font-size:28px; font-weight:800; margin-bottom:8px; }
 .sc-value.sm { font-size:22px; }
@@ -3665,7 +3665,8 @@ const scrapByStock = computed(() => {
 .adj-btn { padding:3px 7px; font-size:12px; border:1px solid #d1d5db; border-radius:5px; background:#fff; cursor:pointer; }
 .adj-btn:hover { background:#f3f4f6; }
 .adj-btn-reset { background:#ede9fe; border-color:#a78bfa; color:#5b21b6; }
-.sim-card { background:linear-gradient(135deg,#1e3a5f,#2d6a4f) !important; color:#fff !important; }
+.sim-card { background:linear-gradient(135deg,#1e3a5f,#2d6a4f) !important; color:#fff !important; transition:0.15s; }
+.sim-card:hover { transform:translateY(-2px); box-shadow:0 12px 28px rgba(0,0,0,0.25) !important; }
 .sim-card .sc-label { color:rgba(255,255,255,0.8) !important; }
 .sim-card .sc-value { color:#fff !important; }
 .sim-card .sc-sub span { color:rgba(255,255,255,0.75) !important; }
