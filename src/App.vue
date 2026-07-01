@@ -593,6 +593,7 @@ const fetchAll = async () => {
   } catch (e) { console.error(e) }
   loading.value = false
   autoRefreshPrices()
+  fetchSimPrices()
 }
 
 const autoRefreshPrices = async () => {
@@ -618,7 +619,7 @@ const fetchPrices = async (tickers) => {
       body: JSON.stringify({ tickers })
     })
     const data = await res.json()
-    return data?.ok ? data.prices : {}
+    return (data && !data.ok && !data.error) ? data : {}
   } catch { return {} }
 }
 
@@ -633,6 +634,7 @@ const refreshAllPrices = async () => {
     const price = prices[stock.ticker]
     if (price) { await updateCurrentPrice(stock, price); updated++ }
   }))
+  await fetchSimPrices()
   refreshing.value = false
   alert(`${updated}/${targets.length}개 업데이트 완료!`)
 }
@@ -917,7 +919,15 @@ const fmtRate = r => (r >= 0 ? '+' : '') + Number(r).toFixed(2) + '%'
 const isProfit= r => r >= 0
 
 // ── 모의투자 계산
+const simPrices = ref({})
+const fetchSimPrices = async () => {
+  const tickers = simHoldings.value.filter(h => h.ticker).map(h => h.ticker)
+  if (!tickers.length) return
+  const prices = await fetchPrices(tickers)
+  if (Object.keys(prices).length) simPrices.value = { ...simPrices.value, ...prices }
+}
 const simCurrentPrice = (h) => {
+  if (h.ticker && simPrices.value[h.ticker]) return simPrices.value[h.ticker]
   const s = stocks.value.find(s => s.name === h.name || s.ticker === h.ticker)
   return s?.current_price || h.avg_price
 }
@@ -965,7 +975,7 @@ const simBuy = async () => {
     existing.quantity = newQty; existing.avg_price = newAvg
   } else {
     const { data } = await supabase.from('sim_holdings').insert({ name: simBuyForm.value.name, ticker: simBuyForm.value.ticker, quantity: qty, avg_price: price }).select().single()
-    if (data) simHoldings.value.push(data)
+    if (data) { simHoldings.value.push(data); fetchSimPrices() }
   }
   const newCash = simBalance.value - total
   await supabase.from('sim_balance').update({ cash: newCash }).eq('id', 1)
@@ -976,10 +986,14 @@ const simBuy = async () => {
   showSimBuy.value = false
 }
 
-const openSimSell = (h) => {
+const openSimSell = async (h) => {
   simSellTarget.value = h
   const stock = stocks.value.find(s => s.name === h.name || s.ticker === h.ticker)
   simSellForm.value = { quantity: '', price: stock?.current_price || h.avg_price || '' }
+  if (h.ticker) {
+    const prices = await fetchPrices([h.ticker])
+    if (prices[h.ticker]) simSellForm.value.price = prices[h.ticker]
+  }
 }
 
 const simSell = async () => {
@@ -2286,7 +2300,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(t.quantity) }}주</td>
                         <td>{{ fmt(t.price) }}원</td>
                         <td :class="t.type==='buy'?'loss':'profit'">{{ t.type==='buy'?'-':'+' }}{{ fmt(t.total) }}원</td>
-                        <td v-if="t.type==='sell' && t.pnl != null" :class="t.pnl>=0?'profit':'loss'">{{ t.pnl>=0?'+':'' }}{{ fmt(t.pnl) }}원</td>
+                        <td v-if="t.type==='sell' && t.avg_price > 0" :class="t.pnl>=0?'profit':'loss'">{{ t.pnl>=0?'+':'' }}{{ fmt(t.pnl) }}원</td>
                         <td v-else style="color:#d1d5db">—</td>
                       </tr>
                       <tr v-if="simTrades.length===0"><td colspan="7" class="empty-td">거래 내역이 없어요</td></tr>
