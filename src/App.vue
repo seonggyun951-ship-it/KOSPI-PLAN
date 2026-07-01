@@ -10,6 +10,7 @@ const supabase = createClient(
 const EDGE_FUNCTION_URL  = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/smooth-action'
 const KIS_PRICE_URL     = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/price-auto-refresh'
 const NEWS_FETCH_URL    = 'https://wqahhqssawaxynqigwtr.supabase.co/functions/v1/news-fetch'
+const DISCORD_WEBHOOK   = import.meta.env.VITE_DISCORD_WEBHOOK
 const COLORS = ['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#dc2626','#db2777','#65a30d','#9333ea','#0284c7','#c2410c','#0f766e']
 
 const STOCK_DB = [
@@ -440,6 +441,44 @@ const EXERCISE_DB = {
     '수영'
   ]
 }
+// ── 목표가 알림
+const notifiedCondIds = ref(new Set())
+const requestNotificationPermission = async () => {
+  if ('Notification' in window && Notification.permission === 'default') {
+    await Notification.requestPermission()
+  }
+}
+const checkConditionsAlert = (prices) => {
+  for (const c of tradeConditions.value) {
+    if (!c.active || notifiedCondIds.value.has(c.id)) continue
+    const price = prices[c.ticker]
+    if (!price) continue
+    const triggered = c.condition_type === 'buy' ? price <= c.target_price : price >= c.target_price
+    if (triggered) {
+      notifiedCondIds.value.add(c.id)
+      const emoji = c.condition_type === 'buy' ? '📈' : '📉'
+      const label = c.condition_type === 'buy' ? '매수' : '매도'
+      // 브라우저 알림
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`${emoji} ${label} 조건 도달: ${c.name}`, {
+          body: `현재가 ${price.toLocaleString()}원 → 목표가 ${c.target_price.toLocaleString()}원 (${c.quantity}주)`,
+          icon: '/favicon.ico'
+        })
+      }
+      // 디스코드 알림
+      if (DISCORD_WEBHOOK) {
+        fetch(DISCORD_WEBHOOK, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: `${emoji} **${label} 조건 도달: ${c.name}**\n현재가 **${price.toLocaleString()}원** → 목표가 ${c.target_price.toLocaleString()}원 (${c.quantity}주)`
+          })
+        }).catch(() => {})
+      }
+    }
+  }
+}
+
 // ── 자동매매 조건
 const addCondition = async () => {
   const f = condForm.value
@@ -500,6 +539,7 @@ const selectSearchResult = async (result, stock) => {
 }
 
 const clearSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
+const clearCondSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
 const closeAddModal = () => {
   newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' }
   addModalCurrentPrice.value = null
@@ -605,6 +645,7 @@ const autoRefreshPrices = async () => {
     const price = prices[stock.ticker]
     return price ? updateCurrentPrice(stock, price) : Promise.resolve()
   }))
+  checkConditionsAlert(prices)
 }
 
 // ── 현재가 (KIS API via Edge Function)
@@ -833,7 +874,7 @@ let channel
 onMounted(async () => {
   window.addEventListener('resize', onResize)
   const { data: { session } } = await supabase.auth.getSession()
-  if (session) { isAuthorized.value = true; await fetchAll(); startInactivityWatch() }
+  if (session) { isAuthorized.value = true; await fetchAll(); startInactivityWatch(); requestNotificationPermission() }
   channel = supabase.channel('stock-realtime')
     .on('postgres_changes', { event:'*', schema:'public', table:'stock_items' }, (p) => {
       if (p.eventType==='INSERT') { if (!stocks.value.find(s=>s.id===p.new.id)) stocks.value.push(p.new) }
@@ -941,6 +982,15 @@ const simTotalAsset   = computed(() => simBalance.value + simHoldingValue.value)
 const SIM_INIT_CAPITAL = 10000000
 const simOverallPnl  = computed(() => simTotalAsset.value - SIM_INIT_CAPITAL)
 const simOverallRate = computed(() => simOverallPnl.value / SIM_INIT_CAPITAL * 100)
+
+// 모의투자 통계
+const simSellTrades       = computed(() => simTrades.value.filter(t => t.type === 'sell' && t.avg_price > 0))
+const simTotalRealizedPnl = computed(() => simSellTrades.value.reduce((s, t) => s + (t.pnl || 0), 0))
+const simWinCount         = computed(() => simSellTrades.value.filter(t => t.pnl > 0).length)
+const simWinRate          = computed(() => simSellTrades.value.length ? Math.round(simWinCount.value / simSellTrades.value.length * 100) : null)
+const simBestTrade        = computed(() => simSellTrades.value.length ? Math.max(...simSellTrades.value.map(t => t.pnl || 0)) : null)
+const simWorstTrade       = computed(() => simSellTrades.value.length ? Math.min(...simSellTrades.value.map(t => t.pnl || 0)) : null)
+const simAvgHoldCount     = computed(() => simSellTrades.value.length)
 
 const simSearchStock = (q) => {
   if (!q || q.trim().length < 1) { simSearchResults.value = []; return }
@@ -2137,6 +2187,24 @@ const scrapByStock = computed(() => {
                   </div>
                   <div v-else class="empty-chart">종목을 추가해보세요</div>
                 </div>
+                <div class="card full-width">
+                  <div class="card-title">종목별 손익 금액</div>
+                  <div v-if="stocks.length > 0" class="bar-chart">
+                    <div v-for="(s,i) in [...stocks].sort((a,b)=>stockPnl(b)-stockPnl(a))" :key="s.id" class="bar-row">
+                      <div class="bar-label">
+                        <span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span>
+                        <span>{{ s.name }}</span>
+                        <span class="type-badge" :class="s.type" style="margin-left:6px">{{ s.type==='long'?'장기':'단기' }}</span>
+                      </div>
+                      <div class="bar-track">
+                        <div class="bar-fill" :style="{ width: Math.min(Math.abs(stockPnl(s))/Math.max(...stocks.map(x=>Math.abs(stockPnl(x))),1)*100,100)+'%', background: stockPnl(s)>=0?'#ef4444':'#2563eb', marginLeft: stockPnl(s)>=0?'50%':`${50-Math.min(Math.abs(stockPnl(s))/Math.max(...stocks.map(x=>Math.abs(stockPnl(x))),1)*50,50)}%` }"></div>
+                        <div class="bar-center"></div>
+                      </div>
+                      <div class="bar-rate" :class="stockPnl(s)>=0?'profit':'loss'">{{ stockPnl(s)>=0?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</div>
+                    </div>
+                  </div>
+                  <div v-else class="empty-chart">종목을 추가해보세요</div>
+                </div>
               </div>
             </template>
 
@@ -2263,6 +2331,30 @@ const scrapByStock = computed(() => {
                 <div class="sim-actions">
                   <button class="btn-add-top" @click="showSimBuy=true">📈 매수</button>
                   <button class="btn-cancel" style="font-size:13px" @click="simReset">초기화</button>
+                </div>
+              </div>
+
+              <div v-if="simSellTrades.length > 0" class="sim-stats-grid mt16">
+                <div class="sim-stat-card">
+                  <div class="sim-stat-label">총 매도</div>
+                  <div class="sim-stat-value">{{ simSellTrades.length }}회</div>
+                </div>
+                <div class="sim-stat-card">
+                  <div class="sim-stat-label">승률</div>
+                  <div class="sim-stat-value" :class="simWinRate >= 50 ? 'profit' : 'loss'">{{ simWinRate }}%</div>
+                  <div class="sim-stat-sub">{{ simWinCount }}승 {{ simSellTrades.length - simWinCount }}패</div>
+                </div>
+                <div class="sim-stat-card">
+                  <div class="sim-stat-label">누적 실현손익</div>
+                  <div class="sim-stat-value" :class="simTotalRealizedPnl >= 0 ? 'profit' : 'loss'">{{ simTotalRealizedPnl >= 0 ? '+' : '' }}{{ fmt(simTotalRealizedPnl) }}원</div>
+                </div>
+                <div class="sim-stat-card">
+                  <div class="sim-stat-label">최대 단일 수익</div>
+                  <div class="sim-stat-value profit">+{{ fmt(simBestTrade) }}원</div>
+                </div>
+                <div class="sim-stat-card">
+                  <div class="sim-stat-label">최대 단일 손실</div>
+                  <div class="sim-stat-value loss">{{ fmt(simWorstTrade) }}원</div>
                 </div>
               </div>
 
@@ -3166,7 +3258,7 @@ const scrapByStock = computed(() => {
             <div class="form-group" style="position:relative">
               <label>종목명</label>
               <input v-model="condForm.name" class="input-field" placeholder="삼성전자"
-                @input="searchStock(condForm.name)" @blur="() => { setTimeout(()=>searchResults.value=[],200) }" />
+                @input="searchStock(condForm.name)" @blur="clearCondSearch" />
               <div v-if="searchResults.length" class="search-dropdown">
                 <div v-for="s in searchResults" :key="s.ticker" class="search-item"
                   @mousedown.prevent="selectCondStock(s)">
@@ -3687,6 +3779,11 @@ const scrapByStock = computed(() => {
 .sim-card .sc-pnl { color:#fff !important; }
 .sim-actions { display:flex; flex-direction:column; gap:8px; justify-content:center; }
 .sim-calc { padding:10px 14px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; font-size:13px; color:#0369a1; margin-bottom:4px; }
+.sim-stats-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+.sim-stat-card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:14px 12px; text-align:center; }
+.sim-stat-label { font-size:11px; color:#9ca3af; margin-bottom:6px; }
+.sim-stat-value { font-size:15px; font-weight:700; color:#1e293b; }
+.sim-stat-sub { font-size:11px; color:#9ca3af; margin-top:3px; }
 .side-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:49; }
 
 @media (max-width:768px) {
@@ -3698,6 +3795,7 @@ const scrapByStock = computed(() => {
   .health-summary-grid { grid-template-columns:repeat(2,1fr); }
   .ws-grid { grid-template-columns:repeat(3,1fr); }
   .chart-grid { grid-template-columns:1fr; }
+  .sim-stats-grid { grid-template-columns:repeat(2,1fr); }
   .form-row { flex-direction:column; }
   .top-actions { gap:6px; }
   .btn-refresh { font-size:12px; padding:6px 12px; }

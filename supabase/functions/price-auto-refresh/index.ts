@@ -12,9 +12,9 @@ const BASE = 'https://openapi.koreainvestment.com:9443'
 
 const NAS_TICKERS = new Set(['TSLA','AAPL','NVDA','MSFT','AMZN','GOOGL','META','NFLX','AMD','PLTR','AVGO','ARM','COIN','SNOW','SMCI','PANW','CRWD','NOW','CRM','QCOM','INTC'])
 
-const getToken = async (supabase: any) => {
+const getToken = async (supabase) => {
   const { data } = await supabase.from('kis_token').select('*').eq('id', 1).single()
-  if (data?.token && Date.now() < data.expires_at) return data.token
+  if (data && data.token && Date.now() < data.expires_at) return data.token
 
   const res = await fetch(`${BASE}/oauth2/tokenP`, {
     method: 'POST',
@@ -28,37 +28,37 @@ const getToken = async (supabase: any) => {
   return d.access_token
 }
 
-const getPrice = async (token: string, ticker: string) => {
+const getPrice = async (token, ticker) => {
   if (ticker.includes('.KS') || ticker.includes('.KQ')) {
     const code = ticker.split('.')[0]
     const res = await fetch(BASE + '/uapi/domestic-stock/v1/quotations/inquire-price?fid_cond_mrkt_div_code=J&fid_input_iscd=' + code, {
       headers: { 'Authorization': 'Bearer ' + token, 'appkey': APP_KEY, 'appsecret': APP_SECRET, 'tr_id': 'FHKST01010100', 'Content-Type': 'application/json' }
     })
     const data = await res.json()
-    return Number(data?.output?.stck_prpr) || null
+    return Number(data && data.output && data.output.stck_prpr) || null
   } else {
     const excd = NAS_TICKERS.has(ticker) ? 'NAS' : 'NYS'
     const res = await fetch(BASE + '/uapi/overseas-price/v1/quotations/price?AUTH=&EXCD=' + excd + '&SYMB=' + ticker, {
       headers: { 'Authorization': 'Bearer ' + token, 'appkey': APP_KEY, 'appsecret': APP_SECRET, 'tr_id': 'HHDFS00000300', 'Content-Type': 'application/json' }
     })
     const data = await res.json()
-    return Number(data?.output?.last) || null
+    return Number(data && data.output && data.output.last) || null
   }
 }
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
-    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const supabase = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
     const token = await getToken(supabase)
 
     // 티커 목록이 body에 오면 → 가격만 반환 (프론트 수동 조회용)
-    let body: any = {}
+    let body = {}
     try { body = await req.json() } catch {}
 
     if (body.tickers && Array.isArray(body.tickers) && body.tickers.length > 0) {
-      const prices: Record<string, number> = {}
-      await Promise.all(body.tickers.map(async (ticker: string) => {
+      const prices = {}
+      await Promise.all(body.tickers.map(async (ticker) => {
         try {
           const price = await getPrice(token, ticker)
           if (price) prices[ticker] = price
@@ -67,26 +67,62 @@ serve(async (req) => {
       return new Response(JSON.stringify(prices), { headers: { ...cors, 'Content-Type': 'application/json' } })
     }
 
-    // 티커 없으면 → DB 전체 갱신 (cron 자동 실행용)
-    const { data: stockItems, error } = await supabase
-      .from('stock_items')
-      .select('id, ticker')
-      .not('ticker', 'is', null)
-      .neq('ticker', '')
+    // 티커 없으면 → DB 전체 갱신 + 조건 체크 (cron 자동 실행용)
+    const [stockRes, condRes] = await Promise.all([
+      supabase.from('stock_items').select('id, ticker').not('ticker', 'is', null).neq('ticker', ''),
+      supabase.from('trade_conditions').select('*').eq('active', true).is('notified_at', null)
+    ])
 
-    if (error) throw error
-    if (!stockItems?.length) return new Response(JSON.stringify({ ok: true, updated: 0 }), { headers: { ...cors, 'Content-Type': 'application/json' } })
+    if (stockRes.error) throw stockRes.error
 
-    let updated = 0
-    await Promise.all(stockItems.map(async (stock: any) => {
+    const stockItems = stockRes.data || []
+    const conditions = condRes.data || []
+
+    // 필요한 모든 티커 수집 (포트폴리오 + 조건)
+    const tickerSet = new Set()
+    stockItems.forEach((s) => { if (s.ticker) tickerSet.add(s.ticker) })
+    conditions.forEach((c) => { if (c.ticker) tickerSet.add(c.ticker) })
+
+    // 전체 가격 한번에 조회
+    const priceMap = {}
+    await Promise.all([...tickerSet].map(async (ticker) => {
       try {
-        const price = await getPrice(token, stock.ticker)
-        if (price) {
-          await supabase.from('stock_items').update({ current_price: price }).eq('id', stock.id)
-          updated++
-        }
-      } catch (e) { console.error(stock.ticker + ' 실패:', e) }
+        const price = await getPrice(token, ticker)
+        if (price) priceMap[ticker] = price
+      } catch (e) { console.error(ticker + ' 실패:', e) }
     }))
+
+    // 포트폴리오 현재가 업데이트
+    let updated = 0
+    await Promise.all(stockItems.map(async (stock) => {
+      const price = priceMap[stock.ticker]
+      if (price) {
+        await supabase.from('stock_items').update({ current_price: price }).eq('id', stock.id)
+        updated++
+      }
+    }))
+
+    // 자동매매 조건 체크 + Discord 알림
+    const DISCORD_WEBHOOK = Deno.env.get('DISCORD_WEBHOOK')
+    if (conditions.length > 0 && DISCORD_WEBHOOK) {
+      await Promise.all(conditions.map(async (c) => {
+        const price = priceMap[c.ticker]
+        if (!price) return
+        const triggered = c.condition_type === 'buy' ? price <= c.target_price : price >= c.target_price
+        if (!triggered) return
+
+        const emoji = c.condition_type === 'buy' ? '📈' : '📉'
+        const label = c.condition_type === 'buy' ? '매수' : '매도'
+        await fetch(DISCORD_WEBHOOK, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: `${emoji} **${label} 조건 도달: ${c.name}**\n현재가 **${price.toLocaleString()}원** → 목표가 ${c.target_price.toLocaleString()}원 (${c.quantity}주)`
+          })
+        })
+        await supabase.from('trade_conditions').update({ notified_at: new Date().toISOString() }).eq('id', c.id)
+      }))
+    }
 
     return new Response(JSON.stringify({ ok: true, updated }), { headers: { ...cors, 'Content-Type': 'application/json' } })
   } catch (e) {
