@@ -962,9 +962,13 @@ const isProfit= r => r >= 0
 // ── 모의투자 계산
 const simPrices = ref({})
 const fetchSimPrices = async () => {
-  const tickers = simHoldings.value.filter(h => h.ticker).map(h => h.ticker)
-  if (!tickers.length) return
-  const prices = await fetchPrices(tickers)
+  const tickers = [
+    ...simHoldings.value.filter(h => h.ticker).map(h => h.ticker),
+    ...tradeConditions.value.filter(c => c.ticker).map(c => c.ticker)
+  ]
+  const unique = [...new Set(tickers)]
+  if (!unique.length) return
+  const prices = await fetchPrices(unique)
   if (Object.keys(prices).length) simPrices.value = { ...simPrices.value, ...prices }
 }
 const simCurrentPrice = (h) => {
@@ -2407,11 +2411,12 @@ const scrapByStock = computed(() => {
                 </div>
                 <div class="table-wrap">
                   <table class="stock-table">
-                    <thead><tr><th>종목</th><th>구분</th><th>목표가</th><th>수량</th><th>상태</th><th></th></tr></thead>
+                    <thead><tr><th>종목</th><th>구분</th><th>현재가</th><th>목표가</th><th>수량</th><th>상태</th><th></th></tr></thead>
                     <tbody>
                       <tr v-for="c in tradeConditions" :key="c.id">
                         <td><div class="name-text">{{ c.name }}</div><div class="ticker-text">{{ c.ticker }}</div></td>
                         <td><span class="type-badge" :class="c.condition_type==='buy'?'long':'short'">{{ c.condition_type==='buy'?'매수':'매도' }}</span></td>
+                        <td>{{ simPrices[c.ticker] ? fmt(simPrices[c.ticker])+'원' : '—' }}</td>
                         <td>{{ fmt(c.target_price) }}원</td>
                         <td>{{ fmt(c.quantity) }}주</td>
                         <td>
