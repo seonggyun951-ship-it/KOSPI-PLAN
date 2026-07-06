@@ -190,7 +190,18 @@ const tab        = ref('dashboard')
 const loading    = ref(true)
 const saveStatus = ref(null)
 const showAdd    = ref(false)
-const editStock  = ref(null)
+const editStock      = ref(null)
+const stockTargetItem = ref(null)
+const saveStockTarget = async () => {
+  if (!stockTargetItem.value) return
+  const { id } = stockTargetItem.value
+  const tp = stockTargetItem.value.target_price ? Number(stockTargetItem.value.target_price) : null
+  const tt = stockTargetItem.value.target_type || 'sell'
+  await supabase.from('stock_items').update({ target_price: tp, target_type: tt, target_notified: false }).eq('id', id)
+  const idx = stocks.value.findIndex(s => s.id === id)
+  if (idx >= 0) { stocks.value[idx].target_price = tp; stocks.value[idx].target_type = tt; stocks.value[idx].target_notified = false }
+  stockTargetItem.value = null
+}
 const refreshing = ref(false)
 const sideOpen   = ref(false)
 const isMobile   = ref(window.innerWidth <= 768)
@@ -216,6 +227,7 @@ const showCondForm    = ref(false)
 const condForm        = ref({ name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' })
 const condCurrentPrice = ref(null)
 const condPriceFetching = ref(false)
+const condHoldingQty = ref(null)
 const fetchCondPrice = async (ticker) => {
   if (!ticker) { condCurrentPrice.value = null; return }
   condPriceFetching.value = true
@@ -229,7 +241,33 @@ const selectCondStock = (s) => {
   condForm.value.ticker = s.ticker
   searchResults.value   = []
   fetchCondPrice(s.ticker)
+  if (condForm.value.condition_type === 'sell') {
+    const holding = simHoldings.value.find(h => h.ticker === s.ticker) || simHoldings.value.find(h => h.name === s.name)
+    condHoldingQty.value = holding ? holding.quantity : null
+  } else {
+    condHoldingQty.value = null
+  }
 }
+
+const searchCondStock = (query) => {
+  if (condForm.value.condition_type === 'sell') {
+    const q = (query || '').trim().toLowerCase()
+    searchResults.value = simHoldings.value
+      .filter(h => !q || h.name.toLowerCase().includes(q) || (h.ticker||'').toLowerCase().includes(q))
+      .map(h => ({ name: h.name, ticker: h.ticker }))
+      .slice(0, 6)
+  } else {
+    searchStock(query)
+  }
+}
+
+watch(() => condForm.value.condition_type, () => {
+  condForm.value.name   = ''
+  condForm.value.ticker = ''
+  condCurrentPrice.value = null
+  condHoldingQty.value  = null
+  searchResults.value   = []
+})
 const adjustCondPrice = (delta) => {
   condForm.value.target_price = (Number(condForm.value.target_price) || condCurrentPrice.value || 0) + delta
 }
@@ -238,6 +276,26 @@ const adjustCondPrice = (delta) => {
 const stockTrades    = ref([])
 const stockSellTarget = ref(null)
 const stockSellForm  = ref({ quantity:'', price:'' })
+const stockTradeModalStock = ref(null)
+const stockTradeModalFilter = ref('all')
+const stockTradeStockSummary = computed(() => {
+  const map = {}
+  stockTrades.value.filter(t => t.type === tab.value).forEach(t => {
+    if (!map[t.name]) map[t.name] = { name: t.name, count: 0, pnl: 0 }
+    map[t.name].count++
+    map[t.name].pnl += t.pnl || 0
+  })
+  return Object.values(map).sort((a, b) => b.pnl - a.pnl)
+})
+const stockTradeModalTrades = computed(() => {
+  const now = new Date()
+  return stockTrades.value.filter(t => {
+    if (t.name !== stockTradeModalStock.value) return false
+    if (stockTradeModalFilter.value === 'week') return (now - new Date(t.traded_at)) / (1000*60*60*24) <= 7
+    if (stockTradeModalFilter.value === 'month') { const d = new Date(t.traded_at); return d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth() }
+    return true
+  })
+})
 
 // ── 헬스
 const userExercises   = ref([])  // { id, exercise, muscle_group }
@@ -491,6 +549,7 @@ const addCondition = async () => {
   tradeConditions.value.unshift(data)
   condForm.value = { name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' }
   condCurrentPrice.value = null
+  condHoldingQty.value = null
   showCondForm.value = false
 }
 const toggleCondition = async (cond) => {
@@ -893,6 +952,24 @@ onUnmounted(() => {
 const longStocks  = computed(() => stocks.value.filter(s => s.type === 'long'))
 const shortStocks = computed(() => stocks.value.filter(s => s.type === 'short'))
 
+const stockSort = ref({ key: 'name', dir: 1 })
+const setStockSort = (key) => {
+  if (stockSort.value.key === key) stockSort.value.dir *= -1
+  else { stockSort.value.key = key; stockSort.value.dir = 1 }
+}
+const sortedStocks = computed(() => {
+  const list = tab.value === 'long' ? longStocks.value : shortStocks.value
+  const { key, dir } = stockSort.value
+  return [...list].sort((a, b) => {
+    let av, bv
+    if (key === 'name')  { av = a.name; bv = b.name; return dir * av.localeCompare(bv) }
+    if (key === 'pnl')   { av = stockPnl(a);   bv = stockPnl(b) }
+    if (key === 'rate')  { av = stockRate(a);  bv = stockRate(b) }
+    if (key === 'value') { av = stockValue(a); bv = stockValue(b) }
+    return dir * (av - bv)
+  })
+})
+
 const calcGroup = (list) => {
   const invest = list.reduce((s,st) => s + st.quantity * st.avg_price,     0)
   const value  = list.reduce((s,st) => s + st.quantity * st.current_price, 0)
@@ -989,6 +1066,26 @@ const simOverallRate = computed(() => simOverallPnl.value / SIM_INIT_CAPITAL * 1
 
 // 모의투자 통계
 const simSellTrades       = computed(() => simTrades.value.filter(t => t.type === 'sell' && t.avg_price > 0))
+const simTradeModalStock  = ref(null)
+const simTradeModalFilter = ref('all')
+const simTradeStockSummary = computed(() => {
+  const map = {}
+  simTrades.value.forEach(t => {
+    if (!map[t.name]) map[t.name] = { name: t.name, count: 0, pnl: 0 }
+    map[t.name].count++
+    if (t.type === 'sell' && t.avg_price > 0) map[t.name].pnl += t.pnl || 0
+  })
+  return Object.values(map).sort((a, b) => b.pnl - a.pnl)
+})
+const simTradeModalTrades = computed(() => {
+  const now = new Date()
+  return simTrades.value.filter(t => {
+    if (t.name !== simTradeModalStock.value) return false
+    if (simTradeModalFilter.value === 'week') return (now - new Date(t.traded_at)) / (1000*60*60*24) <= 7
+    if (simTradeModalFilter.value === 'month') { const d = new Date(t.traded_at); return d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth() }
+    return true
+  })
+})
 const simTotalRealizedPnl = computed(() => simSellTrades.value.reduce((s, t) => s + (t.pnl || 0), 0))
 const simWinCount         = computed(() => simSellTrades.value.filter(t => t.pnl > 0).length)
 const simWinRate          = computed(() => simSellTrades.value.length ? Math.round(simWinCount.value / simSellTrades.value.length * 100) : null)
@@ -2007,7 +2104,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><div class="td-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
+                        <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
                       <tr v-if="stocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
@@ -2023,7 +2120,7 @@ const scrapByStock = computed(() => {
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
                     <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
                     <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
-                    <div class="ms-actions"><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
+                    <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="stocks.length===0" class="empty-td">종목을 추가해보세요</div>
                 </div>
@@ -2096,13 +2193,20 @@ const scrapByStock = computed(() => {
               <div class="card mt16">
                 <div class="card-title">{{ tab==='long'?'장기':'단기' }} 종목 ({{ (tab==='long'?longStocks:shortStocks).length }}개)</div>
                 <!-- PC 테이블 -->
-                <div v-if="!isMobile" class="table-wrap">
+                <div v-if="!isMobile" class="table-wrap invest-table-wrap">
                   <table class="stock-table">
                     <thead>
-                      <tr><th>종목명</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
+                      <tr>
+                        <th @click="setStockSort('name')" class="th-sort">종목명{{ stockSort.key==='name'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
+                        <th>수량</th><th>평균단가</th><th>현재가</th>
+                        <th @click="setStockSort('value')" class="th-sort">평가금액{{ stockSort.key==='value'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
+                        <th @click="setStockSort('pnl')" class="th-sort">손익{{ stockSort.key==='pnl'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
+                        <th @click="setStockSort('rate')" class="th-sort">수익률{{ stockSort.key==='rate'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
+                        <th></th>
+                      </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="(s,i) in (tab==='long'?longStocks:shortStocks)" :key="s.id">
+                      <tr v-for="(s,i) in sortedStocks" :key="s.id">
                         <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
@@ -2110,24 +2214,66 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
+                        <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
-                      <tr v-if="(tab==='long'?longStocks:shortStocks).length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
+                      <tr v-if="sortedStocks.length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
                 <!-- 모바일 카드 -->
                 <div v-else class="ms-list">
-                  <div v-for="(s,i) in (tab==='long'?longStocks:shortStocks)" :key="s.id" class="ms-card">
+                  <div v-for="(s,i) in sortedStocks" :key="s.id" class="ms-card">
                     <div class="ms-top">
                       <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
                     </div>
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
                     <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
                     <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
-                    <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
+                    <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="(tab==='long'?longStocks:shortStocks).length===0" class="empty-td">종목을 추가해보세요</div>
+                </div>
+              </div>
+
+              <div class="card mt16">
+                <div class="card-title">거래 내역 (매도)</div>
+                <div v-if="stockTradeStockSummary.length" class="trade-stock-list">
+                  <div v-for="s in stockTradeStockSummary" :key="s.name" class="trade-stock-chip" @click="stockTradeModalStock=s.name; stockTradeModalFilter='all'">
+                    <span class="trade-chip-name">{{ s.name }}</span>
+                    <span class="trade-chip-count">{{ s.count }}회</span>
+                    <span class="trade-chip-pnl" :class="s.pnl>=0?'profit':'loss'">{{ s.pnl>=0?'+':'' }}{{ fmt(Math.round(s.pnl)) }}원</span>
+                  </div>
+                </div>
+                <div v-else class="empty-td">거래 내역이 없어요</div>
+              </div>
+
+              <div v-if="stockTradeModalStock" class="modal-overlay" @click.self="stockTradeModalStock=null">
+                <div class="modal">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                    <h3 style="margin:0">{{ stockTradeModalStock }}</h3>
+                    <button @click="stockTradeModalStock=null" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af">✕</button>
+                  </div>
+                  <div style="display:flex;gap:4px;margin-bottom:10px">
+                    <button v-for="f in [{k:'all',l:'전체'},{k:'month',l:'이번달'},{k:'week',l:'이번주'}]" :key="f.k"
+                      @click="stockTradeModalFilter=f.k"
+                      :style="stockTradeModalFilter===f.k?'background:#2563eb;color:white;border-color:#2563eb':''"
+                      class="adj-btn">{{ f.l }}</button>
+                  </div>
+                  <div class="table-wrap">
+                    <table class="stock-table">
+                      <thead><tr><th>일시</th><th>수량</th><th>매수가</th><th>매도가</th><th>손익</th></tr></thead>
+                      <tbody>
+                        <tr v-for="t in stockTradeModalTrades" :key="t.id">
+                          <td style="font-size:12px;color:#9ca3af">{{ new Date(t.traded_at).toLocaleDateString('ko-KR') }}</td>
+                          <td>{{ fmt(t.quantity) }}주</td>
+                          <td>{{ fmt(t.avg_price) }}원</td>
+                          <td>{{ fmt(t.sell_price) }}원</td>
+                          <td :class="t.pnl>=0?'profit':'loss'">{{ t.pnl>=0?'+':'' }}{{ fmt(t.pnl) }}원</td>
+                        </tr>
+                        <tr v-if="stockTradeModalTrades.length===0"><td colspan="5" class="empty-td">내역이 없어요</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </template>
@@ -2385,23 +2531,45 @@ const scrapByStock = computed(() => {
 
               <div class="card mt16">
                 <div class="card-title">거래 내역</div>
-                <div class="table-wrap">
-                  <table class="stock-table">
-                    <thead><tr><th>일시</th><th>종목</th><th>구분</th><th>수량</th><th>가격</th><th>금액</th><th>손익</th></tr></thead>
-                    <tbody>
-                      <tr v-for="t in simTrades" :key="t.id">
-                        <td style="font-size:12px;color:#9ca3af">{{ new Date(t.traded_at).toLocaleDateString('ko-KR') }}</td>
-                        <td><div class="name-text">{{ t.name }}</div></td>
-                        <td><span class="type-badge" :class="t.type==='buy'?'long':'short'">{{ t.type==='buy'?'매수':'매도' }}</span></td>
-                        <td>{{ fmt(t.quantity) }}주</td>
-                        <td>{{ fmt(t.price) }}원</td>
-                        <td :class="t.type==='buy'?'loss':'profit'">{{ t.type==='buy'?'-':'+' }}{{ fmt(t.total) }}원</td>
-                        <td v-if="t.type==='sell' && t.avg_price > 0" :class="t.pnl>=0?'profit':'loss'">{{ t.pnl>=0?'+':'' }}{{ fmt(t.pnl) }}원</td>
-                        <td v-else style="color:#d1d5db">—</td>
-                      </tr>
-                      <tr v-if="simTrades.length===0"><td colspan="7" class="empty-td">거래 내역이 없어요</td></tr>
-                    </tbody>
-                  </table>
+                <div v-if="simTradeStockSummary.length" class="trade-stock-list">
+                  <div v-for="s in simTradeStockSummary" :key="s.name" class="trade-stock-chip" @click="simTradeModalStock=s.name; simTradeModalFilter='all'">
+                    <span class="trade-chip-name">{{ s.name }}</span>
+                    <span class="trade-chip-count">{{ s.count }}회</span>
+                    <span class="trade-chip-pnl" :class="s.pnl>=0?'profit':'loss'">{{ s.pnl>=0?'+':'' }}{{ fmt(Math.round(s.pnl)) }}원</span>
+                  </div>
+                </div>
+                <div v-else class="empty-td">거래 내역이 없어요</div>
+              </div>
+
+              <div v-if="simTradeModalStock" class="modal-overlay" @click.self="simTradeModalStock=null">
+                <div class="modal">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                    <h3 style="margin:0">{{ simTradeModalStock }}</h3>
+                    <button @click="simTradeModalStock=null" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af">✕</button>
+                  </div>
+                  <div style="display:flex;gap:4px;margin-bottom:10px">
+                    <button v-for="f in [{k:'all',l:'전체'},{k:'month',l:'이번달'},{k:'week',l:'이번주'}]" :key="f.k"
+                      @click="simTradeModalFilter=f.k"
+                      :style="simTradeModalFilter===f.k?'background:#2563eb;color:white;border-color:#2563eb':''"
+                      class="adj-btn">{{ f.l }}</button>
+                  </div>
+                  <div class="table-wrap">
+                    <table class="stock-table">
+                      <thead><tr><th>일시</th><th>구분</th><th>수량</th><th>가격</th><th>금액</th><th>손익</th></tr></thead>
+                      <tbody>
+                        <tr v-for="t in simTradeModalTrades" :key="t.id">
+                          <td style="font-size:12px;color:#9ca3af">{{ new Date(t.traded_at).toLocaleDateString('ko-KR') }}</td>
+                          <td><span class="type-badge" :class="t.type==='buy'?'long':'short'">{{ t.type==='buy'?'매수':'매도' }}</span></td>
+                          <td>{{ fmt(t.quantity) }}주</td>
+                          <td>{{ fmt(t.price) }}원</td>
+                          <td :class="t.type==='buy'?'loss':'profit'">{{ t.type==='buy'?'-':'+' }}{{ fmt(t.total) }}원</td>
+                          <td v-if="t.type==='sell' && t.avg_price > 0" :class="t.pnl>=0?'profit':'loss'">{{ t.pnl>=0?'+':'' }}{{ fmt(t.pnl) }}원</td>
+                          <td v-else style="color:#d1d5db">—</td>
+                        </tr>
+                        <tr v-if="simTradeModalTrades.length===0"><td colspan="6" class="empty-td">내역이 없어요</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
               <div class="card mt16">
@@ -3262,8 +3430,11 @@ const scrapByStock = computed(() => {
           <div class="form-row">
             <div class="form-group" style="position:relative">
               <label>종목명</label>
-              <input v-model="condForm.name" class="input-field" placeholder="삼성전자"
-                @input="searchStock(condForm.name)" @blur="clearCondSearch" />
+              <input v-model="condForm.name" class="input-field"
+                :placeholder="condForm.condition_type==='sell' ? '보유 종목 선택' : '삼성전자'"
+                @input="searchCondStock(condForm.name)"
+                @focus="searchCondStock(condForm.name)"
+                @blur="clearCondSearch" />
               <div v-if="searchResults.length" class="search-dropdown">
                 <div v-for="s in searchResults" :key="s.ticker" class="search-item"
                   @mousedown.prevent="selectCondStock(s)">
@@ -3279,7 +3450,7 @@ const scrapByStock = computed(() => {
           </div>
           <div v-if="condPriceFetching || condCurrentPrice" style="font-size:13px;padding:6px 2px;color:#374151">
             <span v-if="condPriceFetching" style="color:#9ca3af">현재가 조회 중...</span>
-            <span v-else>현재가 <b>{{ condCurrentPrice?.toLocaleString() }}원</b></span>
+            <span v-else-if="condCurrentPrice">현재가 <b>{{ condCurrentPrice?.toLocaleString() }}원</b></span>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -3307,6 +3478,7 @@ const scrapByStock = computed(() => {
             <div class="form-group">
               <label>수량</label>
               <input v-model.number="condForm.quantity" type="number" class="input-field" placeholder="0" />
+              <div v-if="condHoldingQty !== null" style="font-size:12px;margin-top:4px;color:#6366f1">보유 수량 <b>{{ condHoldingQty }}주</b></div>
             </div>
           </div>
           <div class="modal-btns">
@@ -3372,6 +3544,34 @@ const scrapByStock = computed(() => {
       </div>
 
       <!-- 종목 수정 모달 -->
+      <div v-if="stockTargetItem" class="modal-overlay" @click.self="stockTargetItem=null">
+        <div class="modal">
+          <h3>목표가 예약 — {{ stockTargetItem.name }}</h3>
+          <div style="font-size:13px;color:#6b7280;margin-bottom:12px;display:flex;gap:16px">
+            <span>평단 <b>{{ fmt(stockTargetItem.avg_price) }}원</b></span>
+            <span>현재가 <b>{{ fmt(stockTargetItem.current_price) }}원</b></span>
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label>구분</label>
+            <div class="type-select">
+              <button :class="{ active: (stockTargetItem.target_type||'sell')==='buy' }" @click="stockTargetItem.target_type='buy'">📈 매수</button>
+              <button :class="{ active: (stockTargetItem.target_type||'sell')==='sell' }" @click="stockTargetItem.target_type='sell'">📉 매도</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>목표가 (원)</label>
+            <input type="number" v-model.number="stockTargetItem.target_price" class="input-field" placeholder="목표가 입력" />
+            <div v-if="stockTargetItem.target_price" style="font-size:12px;margin-top:6px;color:#6b7280">
+              {{ (stockTargetItem.target_type||'sell')==='buy' ? '📈 목표가 이하 하락 시 매수 알림' : '📉 목표가 이상 도달 시 매도 알림' }}
+            </div>
+          </div>
+          <div class="modal-btns">
+            <button @click="stockTargetItem=null" class="btn-cancel">취소</button>
+            <button @click="saveStockTarget" class="btn-primary">저장</button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="editStock" class="modal-overlay" @click.self="editStock=null">
         <div class="modal">
           <h3>종목 수정</h3>
@@ -3533,12 +3733,18 @@ const scrapByStock = computed(() => {
 .leg-val { font-size:12px; color:#9ca3af; min-width:80px; text-align:right; }
 .empty-chart { text-align:center; color:#9ca3af; padding:40px; }
 .bar-chart { display:flex; flex-direction:column; gap:14px; }
+.trade-stock-list { display:flex; flex-direction:column; gap:8px; }
+.trade-stock-chip { display:flex; align-items:center; gap:12px; padding:10px 14px; border:1px solid #e5e7eb; border-radius:8px; cursor:pointer; transition:background 0.15s; width:fit-content; min-width:260px; }
+.trade-stock-chip:hover { background:#f0f4ff; border-color:#2563eb; }
+.trade-chip-name { font-size:14px; font-weight:600; }
+.trade-chip-count { font-size:12px; color:#9ca3af; }
+.trade-chip-pnl { font-size:13px; font-weight:700; }
 .bar-row { display:flex; align-items:center; gap:12px; }
 .bar-label { display:flex; align-items:center; gap:6px; width:160px; font-size:13px; font-weight:500; flex-shrink:0; }
-.bar-track { flex:1; height:20px; background:#f3f4f6; border-radius:4px; position:relative; overflow:hidden; }
+.bar-track { flex:1; height:16px; background:#f3f4f6; border-radius:4px; position:relative; overflow:hidden; }
 .bar-fill { position:absolute; height:100%; border-radius:4px; transition:width 0.4s; }
 .bar-center { position:absolute; left:50%; top:0; bottom:0; width:2px; background:#d1d5db; }
-.bar-rate { width:72px; text-align:right; font-size:13px; font-weight:700; flex-shrink:0; }
+.bar-rate { width:160px; flex-shrink:0; text-align:right; font-size:13px; font-weight:700; white-space:nowrap; }
 
 /* 뉴스 */
 .news-layout { display:grid; grid-template-columns:220px 1fr; gap:16px; align-items:start; }
@@ -3783,6 +3989,10 @@ const scrapByStock = computed(() => {
 .sim-card .sc-sub span { color:rgba(255,255,255,0.75) !important; }
 .sim-card .sc-pnl { color:#fff !important; }
 .sim-actions { display:flex; flex-direction:column; gap:8px; justify-content:center; }
+.invest-table-wrap { max-height:420px; overflow-y:auto; }
+.invest-table-wrap thead th { position:sticky; top:0; background:#fff; z-index:1; }
+.th-sort { cursor:pointer; user-select:none; }
+.th-sort:hover { color:#6c47ff; }
 .sim-calc { padding:10px 14px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; font-size:13px; color:#0369a1; margin-bottom:4px; }
 .sim-stats-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
 .sim-stat-card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:14px 12px; text-align:center; }

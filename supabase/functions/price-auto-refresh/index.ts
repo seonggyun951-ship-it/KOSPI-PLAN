@@ -69,7 +69,7 @@ serve(async (req) => {
 
     // 티커 없으면 → DB 전체 갱신 + 조건 체크 (cron 자동 실행용)
     const [stockRes, condRes] = await Promise.all([
-      supabase.from('stock_items').select('id, ticker').not('ticker', 'is', null).neq('ticker', ''),
+      supabase.from('stock_items').select('id, name, ticker, avg_price, target_price, target_type, target_notified').not('ticker', 'is', null).neq('ticker', ''),
       supabase.from('trade_conditions').select('*').eq('active', true).is('notified_at', null)
     ])
 
@@ -102,8 +102,9 @@ serve(async (req) => {
       }
     }))
 
-    // 자동매매 조건 체크 + Discord 알림
     const DISCORD_WEBHOOK = Deno.env.get('DISCORD_WEBHOOK')
+
+    // 모의투자 자동매매 조건 체크 (파란색 embed)
     if (conditions.length > 0 && DISCORD_WEBHOOK) {
       await Promise.all(conditions.map(async (c) => {
         const price = priceMap[c.ticker]
@@ -117,10 +118,43 @@ serve(async (req) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: `${emoji} **${label} 조건 도달: ${c.name}**\n현재가 **${price.toLocaleString()}원** → 목표가 ${c.target_price.toLocaleString()}원 (${c.quantity}주)`
+            content: `🎮 **[모의투자]** ${emoji} ${label} 조건 도달`,
+            embeds: [{
+              description: `종목: **${c.name}**\n현재가: **${price.toLocaleString()}원**\n목표가: ${c.target_price.toLocaleString()}원\n수량: ${c.quantity}주`,
+              color: 3447003,
+              footer: { text: '모의투자 · KOSPI-PLAN' }
+            }]
           })
         })
         await supabase.from('trade_conditions').update({ notified_at: new Date().toISOString() }).eq('id', c.id)
+      }))
+    }
+
+    // 실투자 목표가 알림 (황금색 embed)
+    if (DISCORD_WEBHOOK) {
+      const realTargets = stockItems.filter(s => s.target_price && !s.target_notified)
+      await Promise.all(realTargets.map(async (s) => {
+        const price = priceMap[s.ticker]
+        if (!price) return
+        const isBuy = s.target_type === 'buy'
+        const triggered = isBuy ? price <= s.target_price : price >= s.target_price
+        if (!triggered) return
+
+        const emoji = isBuy ? '📈' : '📉'
+        const label = isBuy ? '매수 목표가 도달' : '매도 목표가 도달'
+        await fetch(DISCORD_WEBHOOK, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: `💰 **[실투자]** ${emoji} ${label}`,
+            embeds: [{
+              description: `종목: **${s.name}**\n현재가: **${price.toLocaleString()}원**\n목표가: ${s.target_price.toLocaleString()}원`,
+              color: 16766720,
+              footer: { text: '실투자 · KOSPI-PLAN' }
+            }]
+          })
+        })
+        await supabase.from('stock_items').update({ target_notified: true }).eq('id', s.id)
       }))
     }
 
