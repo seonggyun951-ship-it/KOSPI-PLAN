@@ -190,6 +190,7 @@ const tab        = ref('dashboard')
 const loading    = ref(true)
 const saveStatus = ref(null)
 const showAdd    = ref(false)
+const addModalTab = ref('add')
 const editStock      = ref(null)
 const stockTargetItem = ref(null)
 const saveStockTarget = async () => {
@@ -600,10 +601,11 @@ const selectSearchResult = async (result, stock) => {
 const clearSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
 const clearCondSearch = () => { setTimeout(() => { searchResults.value = [] }, 200) }
 const closeAddModal = () => {
-  newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' }
+  newStock.value = { name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long', target_price:'', target_type:'buy' }
   addModalCurrentPrice.value = null
   searchResults.value = []
   showAdd.value = false
+  addModalTab.value = 'add'
 }
 
 let toastTimer = null
@@ -3492,10 +3494,67 @@ const scrapByStock = computed(() => {
       <!-- 종목 추가 모달 -->
       <div v-if="showAdd" class="modal-overlay" @click.self="closeAddModal">
         <div class="modal">
-          <h3>종목 추가</h3>
-          <div class="form-row">
-            <div class="form-group" style="position:relative">
-              <label>종목명 *</label>
+          <div class="add-modal-tabs">
+            <button :class="{ active: addModalTab==='add' }" @click="addModalTab='add'; searchResults=[]">종목 추가</button>
+            <button :class="{ active: addModalTab==='alert' }" @click="addModalTab='alert'; searchResults=[]">매수 예약 알림</button>
+          </div>
+
+          <!-- 종목 추가 탭 -->
+          <template v-if="addModalTab==='add'">
+            <div class="form-row">
+              <div class="form-group" style="position:relative">
+                <label>종목명 *</label>
+                <input v-model="newStock.name" placeholder="삼성전자" class="input-field"
+                  @input="searchStock(newStock.name)" @blur="clearSearch" />
+                <div v-if="searchResults.length > 0 || searchLoading" class="search-dropdown">
+                  <div v-if="searchLoading" class="search-loading">🔍 검색 중...</div>
+                  <div v-for="r in searchResults" :key="r.ticker" class="search-item"
+                    @mousedown.prevent="selectSearchResult(r, newStock)">
+                    <div class="si-name">{{ r.name }}</div>
+                    <div class="si-ticker">{{ r.ticker }}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>티커 <span class="label-opt">(자동입력 또는 직접입력)</span></label>
+                <input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" />
+                <div class="field-hint">
+                  📌 야후파이낸스 티커 형식<br>
+                  · 국내주식: 종목코드 + <b>.KS</b> → <code>005930.KS</code> (삼성전자)<br>
+                  · 코스닥: 종목코드 + <b>.KQ</b> → <code>035720.KQ</code> (카카오)<br>
+                  · 미국주식: 그대로 → <code>AAPL</code>, <code>TSLA</code><br>
+                  ※ 티커 없어도 종목 추가는 가능해요
+                </div>
+              </div>
+            </div>
+            <div v-if="addModalPriceFetching || addModalCurrentPrice" style="font-size:13px;padding:6px 2px;color:#374151">
+              <span v-if="addModalPriceFetching" style="color:#9ca3af">현재가 조회 중...</span>
+              <span v-else>현재가 <b>{{ addModalCurrentPrice?.toLocaleString() }}원</b></span>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>수량 (주)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.quantity)" @input="newStock.quantity = parseInput($event.target.value)" class="input-field" placeholder="10" /></div>
+              <div class="form-group"><label>평균단가 (원)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.avg_price)" @input="newStock.avg_price = parseInput($event.target.value)" class="input-field" placeholder="75,400" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>구분</label>
+                <div class="type-select">
+                  <button :class="{ active: newStock.type==='long'  }" @click="newStock.type='long'">📈 장기투자</button>
+                  <button :class="{ active: newStock.type==='short' }" @click="newStock.type='short'">⚡ 단기투자</button>
+                </div>
+              </div>
+              <div class="form-group"><label>메모</label><input v-model="newStock.memo" placeholder="메모" class="input-field" /></div>
+            </div>
+            <div class="modal-btns">
+              <button @click="closeAddModal" class="btn-cancel">취소</button>
+              <button @click="addStock" class="btn-primary" :disabled="saveStatus==='saving'">추가</button>
+            </div>
+          </template>
+
+          <!-- 매수 예약 알림 탭 -->
+          <template v-if="addModalTab==='alert'">
+            <div class="form-group" style="position:relative;margin-bottom:12px">
+              <label>종목명</label>
               <input v-model="newStock.name" placeholder="삼성전자" class="input-field"
                 @input="searchStock(newStock.name)" @blur="clearSearch" />
               <div v-if="searchResults.length > 0 || searchLoading" class="search-dropdown">
@@ -3507,53 +3566,29 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
             </div>
-            <div class="form-group">
-              <label>티커 <span class="label-opt">(자동입력 또는 직접입력)</span></label>
-              <input v-model="newStock.ticker" placeholder="005930.KS" class="input-field" />
-              <div class="field-hint">
-                📌 야후파이낸스 티커 형식<br>
-                · 국내주식: 종목코드 + <b>.KS</b> → <code>005930.KS</code> (삼성전자)<br>
-                · 코스닥: 종목코드 + <b>.KQ</b> → <code>035720.KQ</code> (카카오)<br>
-                · 미국주식: 그대로 → <code>AAPL</code>, <code>TSLA</code><br>
-                ※ 티커 없어도 종목 추가는 가능해요
-              </div>
+            <div v-if="addModalPriceFetching || addModalCurrentPrice" style="font-size:13px;padding:6px 2px;color:#374151;margin-bottom:8px">
+              <span v-if="addModalPriceFetching" style="color:#9ca3af">현재가 조회 중...</span>
+              <span v-else>현재가 <b>{{ addModalCurrentPrice?.toLocaleString() }}원</b></span>
             </div>
-          </div>
-          <div v-if="addModalPriceFetching || addModalCurrentPrice" style="font-size:13px;padding:6px 2px;color:#374151">
-            <span v-if="addModalPriceFetching" style="color:#9ca3af">현재가 조회 중...</span>
-            <span v-else>현재가 <b>{{ addModalCurrentPrice?.toLocaleString() }}원</b></span>
-          </div>
-          <div class="form-row">
-            <div class="form-group"><label>수량 (주)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.quantity)" @input="newStock.quantity = parseInput($event.target.value)" class="input-field" placeholder="10" /></div>
-            <div class="form-group"><label>평균단가 (원)</label><input type="text" inputmode="numeric" :value="fmtInput(newStock.avg_price)" @input="newStock.avg_price = parseInput($event.target.value)" class="input-field" placeholder="75,400" /></div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
+            <div class="form-group" style="margin-bottom:12px">
               <label>구분</label>
               <div class="type-select">
-                <button :class="{ active: newStock.type==='long'  }" @click="newStock.type='long'">📈 장기투자</button>
-                <button :class="{ active: newStock.type==='short' }" @click="newStock.type='short'">⚡ 단기투자</button>
-              </div>
-            </div>
-            <div class="form-group"><label>메모</label><input v-model="newStock.memo" placeholder="메모" class="input-field" /></div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>목표가 예약 <span class="label-opt">(선택)</span></label>
-              <div class="type-select" style="margin-bottom:6px">
                 <button :class="{ active: newStock.target_type==='buy' }" @click="newStock.target_type='buy'">📈 매수</button>
                 <button :class="{ active: newStock.target_type==='sell' }" @click="newStock.target_type='sell'">📉 매도</button>
               </div>
-              <input type="number" v-model.number="newStock.target_price" class="input-field" placeholder="목표가 입력 (미입력 시 예약 없음)" />
+            </div>
+            <div class="form-group">
+              <label>목표가</label>
+              <input type="number" v-model.number="newStock.target_price" class="input-field" placeholder="목표가 입력" />
               <div v-if="newStock.target_price" style="font-size:12px;margin-top:4px;color:#6b7280">
                 {{ newStock.target_type==='buy' ? '📈 목표가 이하 하락 시 매수 알림' : '📉 목표가 이상 도달 시 매도 알림' }}
               </div>
             </div>
-          </div>
-          <div class="modal-btns">
-            <button @click="closeAddModal" class="btn-cancel">취소</button>
-            <button @click="addStock" class="btn-primary" :disabled="saveStatus==='saving'">추가</button>
-          </div>
+            <div class="modal-btns">
+              <button @click="closeAddModal" class="btn-cancel">취소</button>
+              <button @click="addStock" class="btn-primary" :disabled="saveStatus==='saving'">예약 등록</button>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -3970,6 +4005,9 @@ const scrapByStock = computed(() => {
 .input-field { width:100%; padding:11px 13px; border:1px solid #e0e7ff; border-radius:10px; font-size:14px; background:#f8faff; }
 .input-field::placeholder { color:#c4ccd8; }
 .input-field:focus { outline:none; border-color:#2563eb; background:white; }
+.add-modal-tabs { display:flex; gap:0; margin-bottom:20px; border-bottom:2px solid #e5e7eb; }
+.add-modal-tabs button { flex:1; padding:10px; border:none; background:none; font-size:14px; font-weight:600; color:#9ca3af; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; }
+.add-modal-tabs button.active { color:#2563eb; border-bottom-color:#2563eb; }
 .type-select { display:flex; gap:8px; }
 .type-select button { flex:1; padding:10px; border:2px solid #e0e7ff; border-radius:10px; background:white; font-size:13px; font-weight:600; cursor:pointer; color:#6b7280; }
 .type-select button.active { border-color:#2563eb; background:#eff6ff; color:#2563eb; }
