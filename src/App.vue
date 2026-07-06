@@ -216,7 +216,7 @@ const NEWS_PER_PAGE   = 15
 const bookmarkedIds   = ref(new Set())
 
 // ── 폼
-const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long' })
+const newStock = ref({ name:'', ticker:'', quantity:'', avg_price:'', memo:'', type:'long', target_price:'', target_type:'buy' })
 
 // ── 모의투자
 const simBalance      = ref(0)
@@ -850,7 +850,8 @@ const addStock = async () => {
     return
   }
 
-  const payload = { name, ticker, quantity: qty, avg_price: avgPrice, current_price: 0, memo: newStock.value.memo, type }
+  const tp = newStock.value.target_price ? Number(newStock.value.target_price) : null
+  const payload = { name, ticker, quantity: qty, avg_price: avgPrice, current_price: 0, memo: newStock.value.memo, type, target_price: tp, target_type: newStock.value.target_type || 'buy', target_notified: false }
   const { data, error } = await supabase.from('stock_items').insert(payload).select().single()
   if (!error && data) {
     stocks.value.push(data)
@@ -3535,6 +3536,19 @@ const scrapByStock = computed(() => {
               </div>
             </div>
             <div class="form-group"><label>메모</label><input v-model="newStock.memo" placeholder="메모" class="input-field" /></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>목표가 예약 <span class="label-opt">(선택)</span></label>
+              <div class="type-select" style="margin-bottom:6px">
+                <button :class="{ active: newStock.target_type==='buy' }" @click="newStock.target_type='buy'">📈 매수</button>
+                <button :class="{ active: newStock.target_type==='sell' }" @click="newStock.target_type='sell'">📉 매도</button>
+              </div>
+              <input type="number" v-model.number="newStock.target_price" class="input-field" placeholder="목표가 입력 (미입력 시 예약 없음)" />
+              <div v-if="newStock.target_price" style="font-size:12px;margin-top:4px;color:#6b7280">
+                {{ newStock.target_type==='buy' ? '📈 목표가 이하 하락 시 매수 알림' : '📉 목표가 이상 도달 시 매도 알림' }}
+              </div>
+            </div>
           </div>
           <div class="modal-btns">
             <button @click="closeAddModal" class="btn-cancel">취소</button>
