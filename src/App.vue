@@ -2123,7 +2123,7 @@ const scrapByStock = computed(() => {
                 <div v-if="!isMobile" class="table-wrap">
                   <table class="stock-table">
                     <thead>
-                      <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th>목표가 예약</th><th></th></tr>
+                      <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in stocks" :key="s.id">
@@ -2135,10 +2135,10 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span></td>
+
                         <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
-                      <tr v-if="stocks.length===0"><td colspan="10" class="empty-td">종목을 추가해보세요</td></tr>
+                      <tr v-if="stocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -2156,6 +2156,19 @@ const scrapByStock = computed(() => {
                     <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="stocks.length===0" class="empty-td">종목을 추가해보세요</div>
+                </div>
+              </div>
+
+              <!-- 목표가 예약 섹션 -->
+              <div v-if="stocks.filter(s=>s.target_price).length" class="card mt16">
+                <div class="card-title">🔔 목표가 예약</div>
+                <div v-for="s in stocks.filter(s=>s.target_price)" :key="s.id" class="target-row-item">
+                  <div class="target-row-left">
+                    <span class="name-text">{{ s.name }}</span>
+                    <span class="type-badge" :class="s.type" style="margin-left:6px">{{ s.type==='long'?'장기':'단기' }}</span>
+                  </div>
+                  <span class="target-badge">{{ s.target_type==='buy'?'📈 매수':'📉 매도' }} {{ fmt(s.target_price) }}원</span>
+                  <button @click="stockTargetItem={...s}" class="btn-sm" style="margin-left:8px">수정</button>
                 </div>
               </div>
 
@@ -2235,7 +2248,6 @@ const scrapByStock = computed(() => {
                         <th @click="setStockSort('value')" class="th-sort">평가금액{{ stockSort.key==='value'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
                         <th @click="setStockSort('pnl')" class="th-sort">손익{{ stockSort.key==='pnl'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
                         <th @click="setStockSort('rate')" class="th-sort">수익률{{ stockSort.key==='rate'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
-                        <th>목표가 예약</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -2248,10 +2260,10 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span></td>
+
                         <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
-                      <tr v-if="sortedStocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
+                      <tr v-if="sortedStocks.length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -2268,6 +2280,18 @@ const scrapByStock = computed(() => {
                     <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="(tab==='long'?longStocks:shortStocks).length===0" class="empty-td">종목을 추가해보세요</div>
+                </div>
+              </div>
+
+              <!-- 목표가 예약 섹션 -->
+              <div v-if="sortedStocks.filter(s=>s.target_price).length" class="card mt16">
+                <div class="card-title">🔔 목표가 예약</div>
+                <div v-for="s in sortedStocks.filter(s=>s.target_price)" :key="s.id" class="target-row-item">
+                  <div class="target-row-left">
+                    <span class="name-text">{{ s.name }}</span>
+                  </div>
+                  <span class="target-badge">{{ s.target_type==='buy'?'📈 매수':'📉 매도' }} {{ fmt(s.target_price) }}원</span>
+                  <button @click="stockTargetItem={...s}" class="btn-sm" style="margin-left:8px">수정</button>
                 </div>
               </div>
 
@@ -3793,6 +3817,9 @@ const scrapByStock = computed(() => {
 .name-text { font-weight:600; color:#111827; }
 .ticker-text { font-size:12px; color:#9ca3af; }
 .target-badge { font-size:11px; color:#d97706; background:#fef3c7; border-radius:4px; padding:1px 5px; margin-top:2px; display:inline-block; }
+.target-row-item { display:flex; align-items:center; padding:10px 0; border-bottom:1px solid #f3f4f6; }
+.target-row-item:last-child { border-bottom:none; }
+.target-row-left { flex:1; display:flex; align-items:center; gap:6px; }
 .type-badge { font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; }
 .type-badge.long  { background:#dbeafe; color:#1d4ed8; }
 .type-badge.short { background:#ede9fe; color:#6d28d9; }
