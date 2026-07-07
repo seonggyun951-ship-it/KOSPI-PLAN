@@ -2118,7 +2118,7 @@ const scrapByStock = computed(() => {
 
 
               <div class="card mt16">
-                <div class="card-title">전체 종목 ({{ stocks.length }}개)</div>
+                <div class="card-title">전체 종목 ({{ stocks.filter(s=>s.quantity>0).length }}개)</div>
                 <!-- PC 테이블 -->
                 <div v-if="!isMobile" class="table-wrap">
                   <table class="stock-table">
@@ -2126,7 +2126,7 @@ const scrapByStock = computed(() => {
                       <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
                     </thead>
                     <tbody>
-                      <tr v-for="(s,i) in stocks" :key="s.id">
+                      <tr v-for="(s,i) in stocks.filter(s=>s.quantity>0)" :key="s.id">
                         <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td><span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span></td>
                         <td>{{ fmt(s.quantity) }}주</td>
@@ -2144,7 +2144,7 @@ const scrapByStock = computed(() => {
                 </div>
                 <!-- 모바일 카드 -->
                 <div v-else class="ms-list">
-                  <div v-for="(s,i) in stocks" :key="s.id" class="ms-card">
+                  <div v-for="(s,i) in stocks.filter(s=>s.quantity>0)" :key="s.id" class="ms-card">
                     <div class="ms-top">
                       <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
                       <span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span>
@@ -2226,7 +2226,7 @@ const scrapByStock = computed(() => {
                 </div>
               </div>
               <div class="card mt16">
-                <div class="card-title">{{ tab==='long'?'장기':'단기' }} 종목 ({{ (tab==='long'?longStocks:shortStocks).length }}개)</div>
+                <div class="card-title">{{ tab==='long'?'장기':'단기' }} 종목 ({{ (tab==='long'?longStocks:shortStocks).filter(s=>s.quantity>0).length }}개)</div>
                 <!-- PC 테이블 -->
                 <div v-if="!isMobile" class="table-wrap invest-table-wrap">
                   <table class="stock-table">
@@ -2241,7 +2241,7 @@ const scrapByStock = computed(() => {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="(s,i) in sortedStocks" :key="s.id">
+                      <tr v-for="(s,i) in sortedStocks.filter(s=>s.quantity>0)" :key="s.id">
                         <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
@@ -2258,7 +2258,7 @@ const scrapByStock = computed(() => {
                 </div>
                 <!-- 모바일 카드 -->
                 <div v-else class="ms-list">
-                  <div v-for="(s,i) in sortedStocks" :key="s.id" class="ms-card">
+                  <div v-for="(s,i) in sortedStocks.filter(s=>s.quantity>0)" :key="s.id" class="ms-card">
                     <div class="ms-top">
                       <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
                     </div>
