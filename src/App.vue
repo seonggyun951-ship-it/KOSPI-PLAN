@@ -204,6 +204,14 @@ const saveStockTarget = async () => {
   if (idx >= 0) { stocks.value[idx].target_price = tp; stocks.value[idx].target_type = tt; stocks.value[idx].target_notified = false }
   stockTargetItem.value = null
 }
+const cancelStockTarget = async () => {
+  if (!stockTargetItem.value) return
+  const { id } = stockTargetItem.value
+  await supabase.from('stock_items').update({ target_price: null, target_notified: false }).eq('id', id)
+  const idx = stocks.value.findIndex(s => s.id === id)
+  if (idx >= 0) { stocks.value[idx].target_price = null; stocks.value[idx].target_notified = false }
+  stockTargetItem.value = null
+}
 const refreshing = ref(false)
 const sideOpen   = ref(false)
 const isMobile   = ref(window.innerWidth <= 768)
@@ -227,6 +235,7 @@ const simTrades       = ref([])
 const tradeConditions = ref([])
 const showCondForm    = ref(false)
 const condForm        = ref({ name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' })
+const condEditId      = ref(null)
 const condCurrentPrice = ref(null)
 const condPriceFetching = ref(false)
 const condHoldingQty = ref(null)
@@ -543,16 +552,34 @@ const checkConditionsAlert = (prices) => {
 const addCondition = async () => {
   const f = condForm.value
   if (!f.name || !f.ticker || !f.target_price || !f.quantity) return alert('모든 항목을 입력해주세요')
-  const { data, error } = await supabase.from('trade_conditions').insert({
-    name: f.name, ticker: f.ticker, condition_type: f.condition_type,
-    target_price: Number(f.target_price), quantity: Number(f.quantity), active: true
-  }).select().single()
-  if (error) return alert('저장 실패')
-  tradeConditions.value.unshift(data)
+  if (condEditId.value) {
+    const { error } = await supabase.from('trade_conditions').update({
+      name: f.name, ticker: f.ticker, condition_type: f.condition_type,
+      target_price: Number(f.target_price), quantity: Number(f.quantity)
+    }).eq('id', condEditId.value)
+    if (error) return alert('수정 실패')
+    const idx = tradeConditions.value.findIndex(c => c.id === condEditId.value)
+    if (idx >= 0) tradeConditions.value[idx] = { ...tradeConditions.value[idx], name: f.name, ticker: f.ticker, condition_type: f.condition_type, target_price: Number(f.target_price), quantity: Number(f.quantity) }
+    condEditId.value = null
+  } else {
+    const { data, error } = await supabase.from('trade_conditions').insert({
+      name: f.name, ticker: f.ticker, condition_type: f.condition_type,
+      target_price: Number(f.target_price), quantity: Number(f.quantity), active: true
+    }).select().single()
+    if (error) return alert('저장 실패')
+    tradeConditions.value.unshift(data)
+  }
   condForm.value = { name:'', ticker:'', condition_type:'buy', target_price:'', quantity:'' }
   condCurrentPrice.value = null
   condHoldingQty.value = null
   showCondForm.value = false
+}
+const editCondition = (cond) => {
+  condEditId.value = cond.id
+  condForm.value = { name: cond.name, ticker: cond.ticker, condition_type: cond.condition_type, target_price: cond.target_price, quantity: cond.quantity }
+  condCurrentPrice.value = null
+  condHoldingQty.value = null
+  showCondForm.value = true
 }
 const toggleCondition = async (cond) => {
   const newActive = !cond.active
@@ -2100,7 +2127,7 @@ const scrapByStock = computed(() => {
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in stocks" :key="s.id">
-                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
+                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div></td>
                         <td><span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
@@ -2118,7 +2145,7 @@ const scrapByStock = computed(() => {
                 <div v-else class="ms-list">
                   <div v-for="(s,i) in stocks" :key="s.id" class="ms-card">
                     <div class="ms-top">
-                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
+                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div>
                       <span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span>
                     </div>
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
@@ -2211,7 +2238,7 @@ const scrapByStock = computed(() => {
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in sortedStocks" :key="s.id">
-                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
+                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
                         <td>{{ fmt(s.current_price) }}원</td>
@@ -2228,7 +2255,7 @@ const scrapByStock = computed(() => {
                 <div v-else class="ms-list">
                   <div v-for="(s,i) in sortedStocks" :key="s.id" class="ms-card">
                     <div class="ms-top">
-                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
+                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div>
                     </div>
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
                     <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
@@ -2597,7 +2624,7 @@ const scrapByStock = computed(() => {
                             {{ c.active ? '활성' : '비활성' }}
                           </span>
                         </td>
-                        <td><button class="btn-sm del" @click="deleteCondition(c)">삭제</button></td>
+                        <td><div class="td-actions"><button class="btn-sm" @click="editCondition(c)">수정</button><button class="btn-sm del" @click="deleteCondition(c)">삭제</button></div></td>
                       </tr>
                       <tr v-if="!tradeConditions.length"><td colspan="6" class="empty-td">등록된 조건이 없어요</td></tr>
                     </tbody>
@@ -3428,7 +3455,7 @@ const scrapByStock = computed(() => {
       </div>
 
       <!-- 자동매매 조건 추가 모달 -->
-      <div v-if="showCondForm" class="modal-overlay" @click.self="showCondForm=false">
+      <div v-if="showCondForm" class="modal-overlay" @click.self="showCondForm=false; condEditId=null">
         <div class="modal">
           <h3>자동매매 조건 추가</h3>
           <div class="form-row">
@@ -3486,8 +3513,8 @@ const scrapByStock = computed(() => {
             </div>
           </div>
           <div class="modal-btns">
-            <button @click="showCondForm=false" class="btn-cancel">취소</button>
-            <button @click="addCondition" class="btn-primary">등록</button>
+            <button @click="showCondForm=false; condEditId=null" class="btn-cancel">취소</button>
+            <button @click="addCondition" class="btn-primary">{{ condEditId ? '수정' : '등록' }}</button>
           </div>
         </div>
       </div>
@@ -3615,7 +3642,8 @@ const scrapByStock = computed(() => {
               {{ (stockTargetItem.target_type||'sell')==='buy' ? '📈 목표가 이하 하락 시 매수 알림' : '📉 목표가 이상 도달 시 매도 알림' }}
             </div>
           </div>
-          <div class="modal-btns">
+          <div class="modal-btns" style="flex-wrap:wrap;gap:8px">
+            <button v-if="stockTargetItem.target_price" @click="cancelStockTarget" class="btn-cancel" style="color:#ef4444;border-color:#fca5a5">예약 해제</button>
             <button @click="stockTargetItem=null" class="btn-cancel">취소</button>
             <button @click="saveStockTarget" class="btn-primary">저장</button>
           </div>
@@ -3759,6 +3787,7 @@ const scrapByStock = computed(() => {
 .color-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
 .name-text { font-weight:600; color:#111827; }
 .ticker-text { font-size:12px; color:#9ca3af; }
+.target-badge { font-size:11px; color:#d97706; background:#fef3c7; border-radius:4px; padding:1px 5px; margin-top:2px; display:inline-block; }
 .type-badge { font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; }
 .type-badge.long  { background:#dbeafe; color:#1d4ed8; }
 .type-badge.short { background:#ede9fe; color:#6d28d9; }
