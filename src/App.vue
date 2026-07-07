@@ -2123,11 +2123,11 @@ const scrapByStock = computed(() => {
                 <div v-if="!isMobile" class="table-wrap">
                   <table class="stock-table">
                     <thead>
-                      <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th></th></tr>
+                      <tr><th>종목명</th><th>구분</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th><th>목표가 예약</th><th></th></tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in stocks" :key="s.id">
-                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div></td>
+                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td><span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
@@ -2135,9 +2135,10 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
+                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span><span v-else class="text-gray">—</span></td>
                         <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
-                      <tr v-if="stocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
+                      <tr v-if="stocks.length===0"><td colspan="10" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -2145,12 +2146,13 @@ const scrapByStock = computed(() => {
                 <div v-else class="ms-list">
                   <div v-for="(s,i) in stocks" :key="s.id" class="ms-card">
                     <div class="ms-top">
-                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div>
+                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
                       <span class="type-badge" :class="s.type">{{ s.type==='long'?'장기':'단기' }}</span>
                     </div>
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
                     <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
                     <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
+                    <div v-if="s.target_price" class="ms-row"><span class="ms-lbl">목표가</span><span class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span></div>
                     <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="stocks.length===0" class="empty-td">종목을 추가해보세요</div>
@@ -2233,21 +2235,23 @@ const scrapByStock = computed(() => {
                         <th @click="setStockSort('value')" class="th-sort">평가금액{{ stockSort.key==='value'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
                         <th @click="setStockSort('pnl')" class="th-sort">손익{{ stockSort.key==='pnl'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
                         <th @click="setStockSort('rate')" class="th-sort">수익률{{ stockSort.key==='rate'?(stockSort.dir===1?' ↑':' ↓'):'' }}</th>
+                        <th>목표가 예약</th>
                         <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr v-for="(s,i) in sortedStocks" :key="s.id">
-                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div></td>
+                        <td><div class="td-name"><span class="color-dot" :style="{ background: COLORS[i%COLORS.length] }"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div></td>
                         <td>{{ fmt(s.quantity) }}주</td>
                         <td>{{ fmt(s.avg_price) }}원</td>
                         <td>{{ fmt(s.current_price) }}원</td>
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
+                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span><span v-else class="text-gray">—</span></td>
                         <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
-                      <tr v-if="sortedStocks.length===0"><td colspan="8" class="empty-td">종목을 추가해보세요</td></tr>
+                      <tr v-if="sortedStocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -2255,11 +2259,12 @@ const scrapByStock = computed(() => {
                 <div v-else class="ms-list">
                   <div v-for="(s,i) in sortedStocks" :key="s.id" class="ms-card">
                     <div class="ms-top">
-                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div><div v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</div></div></div>
+                      <div class="td-name"><span class="color-dot" :style="{background:COLORS[i%COLORS.length]}"></span><div><div class="name-text">{{ s.name }}</div><div v-if="s.ticker" class="ticker-text">{{ s.ticker }}</div></div></div>
                     </div>
                     <div class="ms-row"><span class="ms-lbl">평단</span><span>{{ fmt(s.avg_price) }}원</span><span class="ms-lbl">수량</span><span>{{ fmt(s.quantity) }}주</span></div>
                     <div class="ms-row"><span class="ms-lbl">현재가</span><span>{{ fmt(s.current_price) }}원</span><span class="ms-lbl">평가</span><span>{{ fmt(Math.round(stockValue(s))) }}원</span></div>
                     <div class="ms-row"><span class="ms-lbl">손익</span><span :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</span><span class="ms-lbl">수익률</span><span :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</span></div>
+                    <div v-if="s.target_price" class="ms-row"><span class="ms-lbl">목표가</span><span class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span></div>
                     <div class="ms-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div>
                   </div>
                   <div v-if="(tab==='long'?longStocks:shortStocks).length===0" class="empty-td">종목을 추가해보세요</div>
