@@ -2161,6 +2161,19 @@ const scrapByStock = computed(() => {
 
 
 
+              <!-- 목표가 예약 섹션 -->
+              <div v-if="stocks.filter(s=>s.target_price).length" class="card mt16">
+                <div class="card-title">🔔 목표가 예약</div>
+                <div v-for="s in stocks.filter(s=>s.target_price)" :key="s.id" class="target-row-item">
+                  <div class="target-row-left">
+                    <span class="name-text">{{ s.name }}</span>
+                    <span class="type-badge" :class="s.type" style="margin-left:6px">{{ s.type==='long'?'장기':'단기' }}</span>
+                  </div>
+                  <span class="target-badge">{{ s.target_type==='buy'?'📈 매수':'📉 매도' }} {{ fmt(s.target_price) }}원</span>
+                  <button @click="stockTargetItem={...s}" class="btn-sm" style="margin-left:8px">수정</button>
+                </div>
+              </div>
+
               <div class="summary-grid mt16">
                 <div class="summary-card sim-card" @click="tab='sim'" style="cursor:pointer">
                   <div class="sc-label">🎮 모의투자</div>
