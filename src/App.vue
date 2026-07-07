@@ -1,5 +1,5 @@
 <script setup>
-// v2
+// v3
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { createClient } from '@supabase/supabase-js'
 
