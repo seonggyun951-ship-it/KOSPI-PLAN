@@ -2135,7 +2135,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span><span v-else class="text-gray">—</span></td>
+                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span></td>
                         <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
                       <tr v-if="stocks.length===0"><td colspan="10" class="empty-td">종목을 추가해보세요</td></tr>
@@ -2248,7 +2248,7 @@ const scrapByStock = computed(() => {
                         <td>{{ fmt(Math.round(stockValue(s))) }}원</td>
                         <td :class="isProfit(stockPnl(s))?'profit':'loss'">{{ isProfit(stockPnl(s))?'+':'' }}{{ fmt(Math.round(stockPnl(s))) }}원</td>
                         <td :class="isProfit(stockRate(s))?'profit':'loss'">{{ fmtRate(stockRate(s)) }}</td>
-                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span><span v-else class="text-gray">—</span></td>
+                        <td><span v-if="s.target_price" class="target-badge">{{ s.target_type==='buy'?'📈':'📉' }} {{ fmt(s.target_price) }}원</span></td>
                         <td><div class="td-actions"><button @click="openStockSell(s)" class="btn-sm">매도</button><button @click="stockTargetItem={...s}" class="btn-sm">예약</button><button @click="editStock={...s}" class="btn-sm">수정</button><button @click="deleteStock(s.id)" class="btn-sm del">삭제</button></div></td>
                       </tr>
                       <tr v-if="sortedStocks.length===0"><td colspan="9" class="empty-td">종목을 추가해보세요</td></tr>
