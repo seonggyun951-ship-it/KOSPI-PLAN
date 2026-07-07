@@ -3818,7 +3818,7 @@ const scrapByStock = computed(() => {
 .color-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
 .name-text { font-weight:600; color:#111827; }
 .ticker-text { font-size:12px; color:#9ca3af; }
-.target-badge { font-size:11px; color:#d97706; background:#fef3c7; border-radius:4px; padding:1px 5px; margin-top:2px; display:inline-block; }
+.target-badge { font-size:13px; font-weight:600; color:#d97706; background:#fef3c7; border-radius:6px; padding:3px 8px; display:inline-block; }
 .target-row-item { display:flex; align-items:center; padding:10px 0; border-bottom:1px solid #f3f4f6; }
 .target-row-item:last-child { border-bottom:none; }
 .target-row-left { flex:1; display:flex; align-items:center; gap:6px; }
